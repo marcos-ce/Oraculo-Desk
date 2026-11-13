@@ -1,0 +1,53 @@
+FROM docker.io/library/rust:1-slim-bookworm
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG ANDROID_CLT_VERSION=11076708
+ARG ANDROID_COMPILE_SDK=35
+ARG ANDROID_BUILD_TOOLS=35.0.0
+ARG ANDROID_NDK_VERSION=27.2.12479018
+ARG GRADLE_VERSION=8.11
+
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+    ANDROID_HOME=/opt/android-sdk \
+    ANDROID_SDK_ROOT=/opt/android-sdk \
+    GRADLE_HOME=/opt/gradle
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-17-jdk-headless \
+    build-essential \
+    pkg-config \
+    curl \
+    unzip \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Target ARM64 para Android e cargo-ndk instalados dentro da imagem
+RUN rustup target add aarch64-linux-android \
+    && cargo install cargo-ndk --locked
+
+# Android Command-Line Tools + Platform + Build Tools + NDK
+RUN mkdir -p "${ANDROID_HOME}/cmdline-tools" \
+    && curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CLT_VERSION}_latest.zip" -o /tmp/clt.zip \
+    && unzip -q /tmp/clt.zip -d /tmp/clt-extract \
+    && mv /tmp/clt-extract/cmdline-tools "${ANDROID_HOME}/cmdline-tools/latest" \
+    && rm -rf /tmp/clt.zip /tmp/clt-extract \
+    && yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses \
+    && "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" \
+        "platform-tools" \
+        "platforms;android-${ANDROID_COMPILE_SDK}" \
+        "build-tools;${ANDROID_BUILD_TOOLS}" \
+        "ndk;${ANDROID_NDK_VERSION}"
+
+# Gradle CLI instalado na imagem (sem precisar versionar wrapper jar)
+RUN curl -fsSL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o /tmp/gradle.zip \
+    && unzip -q /tmp/gradle.zip -d /opt \
+    && mv "/opt/gradle-${GRADLE_VERSION}" "${GRADLE_HOME}" \
+    && rm -f /tmp/gradle.zip
+
+ENV ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" \
+    PATH="/usr/local/cargo/bin:${GRADLE_HOME}/bin:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}" \
+    CARGO_HOME=/cargo-cache \
+    CARGO_TARGET_DIR=/target-cache \
+    GRADLE_USER_HOME=/gradle-cache
+
+WORKDIR /work

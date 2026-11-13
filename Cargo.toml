@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/oraculo-proto",
+    "crates/oraculo-host",
+    "crates/oraculo-cli",
+    "crates/oraculo-mobile-core",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "P2P remote desktop, PTY terminal, host telemetry, and sandboxed file manager over QUIC (iroh) for Linux (Wayland/X11), Windows, and Android."
+repository = "https://github.com/marcos-ce/Oraculo-Desk"
+homepage = "https://github.com/marcos-ce/Oraculo-Desk"
+keywords = ["remote-desktop", "wayland", "pipewire", "quic", "iroh"]
+categories = ["network-programming", "multimedia::video", "command-line-utilities"]
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.29"
+directories = "6"
+hex = "0.4"
+iroh = "1.4"
+portable-pty = "0.9"
+postcard = { version = "1", features = ["alloc"] }
+qrcode = { version = "0.14", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uniffi = "0.32"
+vt100 = "0.18"

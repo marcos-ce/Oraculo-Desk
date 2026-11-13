@@ -1,0 +1,30 @@
+[package]
+name = "oraculo-mobile-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "oraculo_mobile_core"
+crate-type = ["lib", "cdylib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+default = []
+cli = ["uniffi/cli"]
+
+[dependencies]
+anyhow.workspace = true
+hex.workspace = true
+iroh.workspace = true
+oraculo-proto = { path = "../oraculo-proto" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uniffi.workspace = true
+vt100.workspace = true
