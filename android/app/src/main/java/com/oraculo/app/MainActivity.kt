@@ -24,12 +24,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -83,6 +85,7 @@ import com.oraculo.app.ui.OraculoMetrics
 import com.oraculo.app.ui.OraculoMotion
 import com.oraculo.app.ui.OraculoSquareIconButton
 import com.oraculo.app.ui.OraculoTheme
+import com.oraculo.app.ui.SleepingCatIllustration
 import com.oraculo.app.ui.ThemeMode
 import com.oraculo.app.ui.isOraculoDarkTheme
 import com.oraculo.app.ui.oraculoPressScale
@@ -609,7 +612,8 @@ private fun DeviceListScreen(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxWidth(),
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
                     contentAlignment = Alignment.Center,
                 ) {
                     Column(
@@ -618,30 +622,22 @@ private fun DeviceListScreen(
                             .clip(RoundedCornerShape(20.dp))
                             .background(OraculoColors.Surface)
                             .border(1.dp, OraculoColors.Outline, RoundedCornerShape(20.dp))
-                            .padding(horizontal = 24.dp, vertical = 28.dp),
+                            .padding(horizontal = 24.dp, vertical = 24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Box(
+                        SleepingCatIllustration(
                             modifier = Modifier
-                                .size(50.dp)
-                                .clip(CircleShape)
-                                .background(OraculoColors.SecondaryContainer),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Computer,
-                                contentDescription = null,
-                                tint = OraculoColors.Primary,
-                                modifier = Modifier.size(24.dp),
-                            )
-                        }
+                                .fillMaxWidth(0.78f)
+                                .widthIn(max = 224.dp),
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
                             text = tr("Nenhum computador conectado", "No computers connected"),
                             style = MaterialTheme.typography.titleMedium,
                             color = OraculoColors.OnSurface,
                             textAlign = TextAlign.Center,
                         )
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = tr(
                                 "Rode oraculo-host pair no computador e leia o QR Code.",
