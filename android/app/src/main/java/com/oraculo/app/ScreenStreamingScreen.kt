@@ -11,12 +11,14 @@ import android.view.TextureView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
-import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -35,9 +37,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Fullscreen
@@ -50,8 +52,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -60,6 +66,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -73,8 +80,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -94,14 +110,15 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.oraculo.app.ui.OraculoColors
 import com.oraculo.app.ui.OraculoDeckButton
 import com.oraculo.app.ui.OraculoMetrics
 import com.oraculo.app.ui.OraculoMotion
-import com.oraculo.app.ui.oraculoPressScale
-import com.oraculo.app.ui.rememberPressedInteraction
+import com.oraculo.app.ui.oraculoPrimaryButtonColors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -117,10 +134,12 @@ import uniffi.oraculo_mobile_core.SavedHostInfo
 import uniffi.oraculo_mobile_core.ScreenObserver
 import uniffi.oraculo_mobile_core.ScreenStreamInfo
 import uniffi.oraculo_mobile_core.ScreenVideoFrame
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToInt
 
 private const val TAG_STREAM = "OraculoScreen"
 private const val PREF_SCREEN_PRESET = "screen_preset_v2"
+private const val PREF_SCREEN_TUTORIAL_SEEN = "screen_tutorial_seen_v1"
 private const val PRESET_VALUE_720P30 = "720p30"
 private const val PRESET_VALUE_1080P30 = "1080p30"
 private const val PRESET_VALUE_1080P60 = "1080p60"
@@ -128,6 +147,7 @@ private const val PRESET_VALUE_1080P60 = "1080p60"
 private const val MIN_ZOOM_SCALE = 1f
 private const val MAX_ZOOM_SCALE = 8f
 private const val DOUBLE_TAP_ZOOM_SCALE = 2.5f
+private const val KEYFRAME_REQUEST_MIN_INTERVAL_MS = 350L
 
 private fun MobileScreenPreset.toPrefValue(): String = when (this) {
     MobileScreenPreset.CRISP1080P30 -> PRESET_VALUE_1080P30
@@ -182,6 +202,9 @@ internal fun ScreenStreamingScreen(
     var showMonitorSetupDialog by remember { mutableStateOf(false) }
     var monitorReauthPending by remember { mutableStateOf(false) }
     var streamNotice by remember { mutableStateOf<String?>(null) }
+    var showGestureTutorial by remember {
+        mutableStateOf(!prefs.getBoolean(PREF_SCREEN_TUTORIAL_SEEN, false))
+    }
 
     var inputSession by remember { mutableStateOf<MobileInputSession?>(null) }
     var inputConnecting by remember { mutableStateOf(true) }
@@ -194,9 +217,18 @@ internal fun ScreenStreamingScreen(
     var lastTelemetryAtMs by remember { mutableStateOf(0L) }
 
     val scope = rememberCoroutineScope()
+    val lastKeyframeRequestAtMs = remember { AtomicLong(0L) }
     var zoomScale by remember { mutableFloatStateOf(MIN_ZOOM_SCALE) }
+    val isZoomed by remember { derivedStateOf { zoomScale > 1.05f } }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
     var zoomJob by remember { mutableStateOf<Job?>(null) }
+
+    fun dismissGestureTutorial() {
+        if (!prefs.getBoolean(PREF_SCREEN_TUTORIAL_SEEN, false)) {
+            prefs.edit().putBoolean(PREF_SCREEN_TUTORIAL_SEEN, true).apply()
+        }
+        showGestureTutorial = false
+    }
 
     fun publishTelemetry(text: String, throttleMs: Long = 0L) {
         val now = System.currentTimeMillis()
@@ -293,9 +325,17 @@ internal fun ScreenStreamingScreen(
                 }
             },
             onRequestKeyframe = {
-                val activeScreen = screenSession ?: return@ScreenVideoDecoder
-                CoroutineScope(Dispatchers.IO).launch {
-                    runCatching { activeScreen.requestKeyframe() }
+                val activeScreen = screenSession
+                if (activeScreen != null && activeScreen.isAlive()) {
+                    val nowMs = System.currentTimeMillis()
+                    val prevMs = lastKeyframeRequestAtMs.get()
+                    if (nowMs - prevMs >= KEYFRAME_REQUEST_MIN_INTERVAL_MS &&
+                        lastKeyframeRequestAtMs.compareAndSet(prevMs, nowMs)
+                    ) {
+                        scope.launch(Dispatchers.IO) {
+                            runCatching { activeScreen.requestKeyframe() }
+                        }
+                    }
                 }
             },
             onDecoderError = { message ->
@@ -313,9 +353,7 @@ internal fun ScreenStreamingScreen(
         onDispose {
             val s = attachedSurface
             attachedSurface = null
-            decoder.detachSurface(s)
-            decoder.release()
-            s?.release()
+            decoder.release(s)
         }
     }
 
@@ -591,7 +629,7 @@ internal fun ScreenStreamingScreen(
             return
         }
         monitorSwitching = true
-        CoroutineScope(Dispatchers.IO).launch {
+        scope.launch(Dispatchers.IO) {
             val sent = runCatching { activeSession.switchMonitor() }.isSuccess
             if (!sent) {
                 mainHandler.post {
@@ -610,7 +648,7 @@ internal fun ScreenStreamingScreen(
         }
         monitorReauthPending = true
         showMonitorSetupDialog = false
-        CoroutineScope(Dispatchers.IO).launch {
+        scope.launch(Dispatchers.IO) {
             val sent = runCatching { activeSession.reauthorizeMonitors() }.isSuccess
             if (!sent) {
                 mainHandler.post {
@@ -627,7 +665,7 @@ internal fun ScreenStreamingScreen(
         prefs.edit().putString(PREF_SCREEN_PRESET, next.toPrefValue()).apply()
         val activeSession = screenSession
         if (activeSession != null && activeSession.isAlive()) {
-            CoroutineScope(Dispatchers.IO).launch {
+            scope.launch(Dispatchers.IO) {
                 val ok = runCatching { activeSession.setPreset(next) }.isSuccess
                 if (!ok) {
                     mainHandler.post {
@@ -678,24 +716,18 @@ internal fun ScreenStreamingScreen(
         modifier: Modifier = Modifier,
     ) {
         val info = streamInfo
-        val dotColor = when {
-            screenError != null -> OraculoColors.Error
-            info != null -> OraculoColors.Success
-            else -> OraculoColors.Primary
-        }
         val label = when {
             screenError != null -> "Offline"
             info != null && compactText -> "${info.height}p·${info.fps}"
             info != null -> "${info.width}×${info.height} · ${info.fps}fps"
             else -> "..."
         }
-        StreamControlPill(height = pillHeight, modifier = modifier) {
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .clip(CircleShape)
-                    .background(dotColor),
-            )
+        Box(
+            modifier = modifier
+                .height(pillHeight)
+                .padding(horizontal = 4.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
             Text(
                 text = label,
                 style = TextStyle(
@@ -703,7 +735,7 @@ internal fun ScreenStreamingScreen(
                     fontSize = 11.sp,
                     fontFeatureSettings = "tnum",
                 ),
-                color = OraculoColors.OnSurfaceMuted,
+                color = if (screenError != null) OraculoColors.Error else OraculoColors.OnSurfaceMuted,
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis,
@@ -713,28 +745,43 @@ internal fun ScreenStreamingScreen(
 
     @Composable
     fun ZoomResetChip(pillHeight: Dp = OraculoMetrics.ControlHeightSmall) {
-        if (zoomScale > 1.05f) {
-            val zoomTenths = (zoomScale * 10f).roundToInt()
-            val zoomLabel = "${zoomTenths / 10}.${zoomTenths % 10}x"
-            StreamControlPill(
-                onClick = { resetZoom() },
-                containerColor = OraculoColors.SecondaryContainer,
-                accentBorder = OraculoColors.Primary.copy(alpha = 0.65f),
-                height = pillHeight,
-            ) {
-                Text(
-                    text = "$zoomLabel · 1x",
-                    style = TextStyle(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFeatureSettings = "tnum",
-                    ),
-                    color = OraculoColors.Primary,
-                    maxLines = 1,
-                    softWrap = false,
-                )
-            }
+        val zoomTenths by remember { derivedStateOf { (zoomScale * 10f).roundToInt() } }
+        val zoomLabel = "${zoomTenths / 10}.${zoomTenths % 10}x"
+        StreamToolbarButton(
+            onClick = { resetZoom() },
+            containerColor = OraculoColors.SecondaryContainer,
+            height = pillHeight,
+        ) {
+            Text(
+                text = "$zoomLabel · 1x",
+                style = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFeatureSettings = "tnum",
+                ),
+                color = OraculoColors.OnSecondaryContainer,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+    }
+
+    @Composable
+    fun TutorialHelpChip(pillHeight: Dp = OraculoMetrics.ControlHeightSmall) {
+        StreamToolbarButton(
+            onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                showGestureTutorial = true
+            },
+            height = pillHeight,
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Outlined.HelpOutline,
+                contentDescription = tr("Ajuda de gestos", "Gesture help"),
+                tint = OraculoColors.OnSurface,
+                modifier = Modifier.size(15.dp),
+            )
         }
     }
 
@@ -757,24 +804,20 @@ internal fun ScreenStreamingScreen(
             compact -> "1/$available"
             else -> "1/$available tel."
         }
-        StreamControlPill(
-            onClick = if (screenSession != null && !screenConnecting && !monitorSwitching) {
-                {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    switchMonitor()
-                }
-            } else {
-                null
+        StreamToolbarButton(
+            onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                switchMonitor()
             },
+            enabled = screenSession != null && !screenConnecting && !monitorSwitching,
             containerColor = if (multi) OraculoColors.SecondaryContainer else OraculoColors.Surface,
-            accentBorder = if (multi) OraculoColors.Primary.copy(alpha = 0.65f) else OraculoColors.Outline,
             height = pillHeight,
             modifier = modifier,
         ) {
             Icon(
                 imageVector = Icons.Default.DesktopWindows,
                 contentDescription = "Alternar monitor",
-                tint = if (multi) OraculoColors.Primary else OraculoColors.OnSurfaceMuted,
+                tint = if (multi) OraculoColors.OnSecondaryContainer else OraculoColors.OnSurfaceMuted,
                 modifier = Modifier.size(15.dp),
             )
             Text(
@@ -785,7 +828,7 @@ internal fun ScreenStreamingScreen(
                     fontWeight = FontWeight.SemiBold,
                     fontFeatureSettings = "tnum",
                 ),
-                color = if (multi) OraculoColors.Primary else OraculoColors.OnSurface,
+                color = if (multi) OraculoColors.OnSecondaryContainer else OraculoColors.OnSurface,
                 maxLines = 1,
                 softWrap = false,
             )
@@ -798,12 +841,12 @@ internal fun ScreenStreamingScreen(
         pillHeight: Dp = OraculoMetrics.ControlHeightSmall,
     ) {
         val isHigh = preset != MobileScreenPreset.BALANCED720P30
-        StreamControlPill(
+        StreamToolbarButton(
             onClick = {
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 cyclePreset()
             },
-            accentBorder = if (isHigh) OraculoColors.Primary.copy(alpha = 0.5f) else OraculoColors.Outline,
+            containerColor = if (isHigh) OraculoColors.SecondaryContainer else OraculoColors.Surface,
             height = pillHeight,
             modifier = modifier,
         ) {
@@ -815,7 +858,7 @@ internal fun ScreenStreamingScreen(
                     fontWeight = FontWeight.SemiBold,
                     fontFeatureSettings = "tnum",
                 ),
-                color = if (isHigh) OraculoColors.Primary else OraculoColors.OnSurface,
+                color = if (isHigh) OraculoColors.OnSecondaryContainer else OraculoColors.OnSurface,
                 maxLines = 1,
                 softWrap = false,
             )
@@ -828,31 +871,58 @@ internal fun ScreenStreamingScreen(
         modifier: Modifier = Modifier,
         pillHeight: Dp = OraculoMetrics.ControlHeightSmall,
     ) {
-        StreamControlPill(
-            onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                showKeyboard = !showKeyboard
-            },
-            containerColor = if (showKeyboard) OraculoColors.SecondaryContainer else OraculoColors.Surface,
-            accentBorder = if (showKeyboard) OraculoColors.Primary.copy(alpha = 0.7f) else OraculoColors.Outline,
-            height = pillHeight,
-            modifier = modifier,
-        ) {
-            Icon(
-                imageVector = if (showKeyboard) Icons.Default.KeyboardHide else Icons.Default.Keyboard,
-                contentDescription = if (showKeyboard) "Ocultar teclado" else "Mostrar teclado",
-                tint = if (showKeyboard) OraculoColors.Primary else OraculoColors.OnSurface,
-                modifier = Modifier.size(16.dp),
-            )
-            if (showLabel) {
+        val toggle = {
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            showKeyboard = !showKeyboard
+        }
+        if (showLabel) {
+            StreamToolbarButton(
+                onClick = toggle,
+                containerColor = if (showKeyboard) OraculoColors.SecondaryContainer else OraculoColors.Surface,
+                height = pillHeight,
+                modifier = modifier,
+            ) {
+                Icon(
+                    imageVector = if (showKeyboard) Icons.Default.KeyboardHide else Icons.Default.Keyboard,
+                    contentDescription = if (showKeyboard) "Ocultar teclado" else "Mostrar teclado",
+                    tint = if (showKeyboard) OraculoColors.OnSecondaryContainer else OraculoColors.OnSurface,
+                    modifier = Modifier.size(16.dp),
+                )
                 Text(
                     text = if (showKeyboard) tr("Fechar", "Close") else tr("Teclado", "Keys"),
                     style = MaterialTheme.typography.labelMedium,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (showKeyboard) OraculoColors.Primary else OraculoColors.OnSurface,
+                    color = if (showKeyboard) OraculoColors.OnSecondaryContainer else OraculoColors.OnSurface,
                     maxLines = 1,
                     softWrap = false,
+                )
+            }
+        } else if (showKeyboard) {
+            FilledTonalIconButton(
+                onClick = toggle,
+                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                    containerColor = OraculoColors.SecondaryContainer,
+                    contentColor = OraculoColors.OnSecondaryContainer,
+                ),
+                modifier = modifier.size(pillHeight),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.KeyboardHide,
+                    contentDescription = "Ocultar teclado",
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        } else {
+            IconButton(
+                onClick = toggle,
+                modifier = modifier.size(pillHeight),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Keyboard,
+                    contentDescription = "Mostrar teclado",
+                    tint = OraculoColors.OnSurface,
+                    modifier = Modifier.size(18.dp),
                 )
             }
         }
@@ -863,31 +933,58 @@ internal fun ScreenStreamingScreen(
         showLabel: Boolean = false,
         pillHeight: Dp = OraculoMetrics.ControlHeightSmall,
     ) {
-        StreamControlPill(
-            onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                isLandscape = !isLandscape
-                resetZoom(animated = false)
-            },
-            containerColor = if (isLandscape) OraculoColors.SecondaryContainer else OraculoColors.Surface,
-            accentBorder = if (isLandscape) OraculoColors.Primary.copy(alpha = 0.65f) else OraculoColors.Outline,
-            height = pillHeight,
-        ) {
-            Icon(
-                imageVector = Icons.Default.ScreenRotation,
-                contentDescription = "Girar tela",
-                tint = if (isLandscape) OraculoColors.Primary else OraculoColors.OnSurface,
-                modifier = Modifier.size(15.dp),
-            )
-            if (showLabel) {
+        val toggle = {
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            isLandscape = !isLandscape
+            resetZoom(animated = false)
+        }
+        if (showLabel) {
+            StreamToolbarButton(
+                onClick = toggle,
+                containerColor = if (isLandscape) OraculoColors.SecondaryContainer else OraculoColors.Surface,
+                height = pillHeight,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ScreenRotation,
+                    contentDescription = "Girar tela",
+                    tint = if (isLandscape) OraculoColors.OnSecondaryContainer else OraculoColors.OnSurface,
+                    modifier = Modifier.size(16.dp),
+                )
                 Text(
                     text = tr("Girar", "Rotate"),
                     style = MaterialTheme.typography.labelMedium,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (isLandscape) OraculoColors.Primary else OraculoColors.OnSurface,
+                    color = if (isLandscape) OraculoColors.OnSecondaryContainer else OraculoColors.OnSurface,
                     maxLines = 1,
                     softWrap = false,
+                )
+            }
+        } else if (isLandscape) {
+            FilledTonalIconButton(
+                onClick = toggle,
+                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                    containerColor = OraculoColors.SecondaryContainer,
+                    contentColor = OraculoColors.OnSecondaryContainer,
+                ),
+                modifier = Modifier.size(pillHeight),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ScreenRotation,
+                    contentDescription = "Girar tela",
+                    modifier = Modifier.size(17.dp),
+                )
+            }
+        } else {
+            IconButton(
+                onClick = toggle,
+                modifier = Modifier.size(pillHeight),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ScreenRotation,
+                    contentDescription = "Girar tela",
+                    tint = OraculoColors.OnSurface,
+                    modifier = Modifier.size(17.dp),
                 )
             }
         }
@@ -901,34 +998,52 @@ internal fun ScreenStreamingScreen(
         pillHeight: Dp = OraculoMetrics.ControlHeightSmall,
         translucent: Boolean = false,
     ) {
-        StreamControlPill(
-            onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                onToggle()
-            },
-            containerColor = when {
-                translucent -> Color.Black.copy(alpha = 0.56f)
-                fullscreen -> OraculoColors.SecondaryContainer
-                else -> OraculoColors.Surface
-            },
-            accentBorder = when {
-                translucent -> Color.White.copy(alpha = 0.24f)
-                fullscreen -> OraculoColors.Primary.copy(alpha = 0.65f)
-                else -> OraculoColors.Outline
-            },
-            height = pillHeight,
-            modifier = modifier,
-        ) {
-            Icon(
-                imageVector = if (fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                contentDescription = if (fullscreen) "Sair da tela cheia" else "Tela cheia",
-                tint = when {
-                    translucent -> Color.White.copy(alpha = 0.92f)
-                    fullscreen -> OraculoColors.Primary
-                    else -> OraculoColors.OnSurface
-                },
-                modifier = Modifier.size(16.dp),
-            )
+        val clickHandler = {
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            onToggle()
+        }
+        if (translucent) {
+            FilledIconButton(
+                onClick = clickHandler,
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = Color.Black.copy(alpha = 0.58f),
+                    contentColor = Color.White,
+                ),
+                modifier = modifier.size(pillHeight),
+            ) {
+                Icon(
+                    imageVector = if (fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                    contentDescription = if (fullscreen) "Sair da tela cheia" else "Tela cheia",
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        } else if (fullscreen) {
+            FilledTonalIconButton(
+                onClick = clickHandler,
+                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                    containerColor = OraculoColors.SecondaryContainer,
+                    contentColor = OraculoColors.OnSecondaryContainer,
+                ),
+                modifier = modifier.size(pillHeight),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.FullscreenExit,
+                    contentDescription = "Sair da tela cheia",
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        } else {
+            IconButton(
+                onClick = clickHandler,
+                modifier = modifier.size(pillHeight),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Fullscreen,
+                    contentDescription = "Tela cheia",
+                    tint = OraculoColors.OnSurface,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
     }
 
@@ -937,22 +1052,34 @@ internal fun ScreenStreamingScreen(
         compact: Boolean = false,
         pillHeight: Dp = OraculoMetrics.ControlHeightSmall,
     ) {
-        StreamControlPill(
-            onClick = { handleExit() },
-            accentBorder = OraculoColors.Error.copy(alpha = 0.55f),
-            height = pillHeight,
-        ) {
-            Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = "Sair do streaming",
-                tint = OraculoColors.Error,
-                modifier = Modifier.size(15.dp),
-            )
-            if (!compact) {
+        if (compact) {
+            IconButton(
+                onClick = { handleExit() },
+                modifier = Modifier.size(pillHeight),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Sair do streaming",
+                    tint = OraculoColors.Error,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        } else {
+            StreamToolbarButton(
+                onClick = { handleExit() },
+                containerColor = Color.Transparent,
+                height = pillHeight,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Sair do streaming",
+                    tint = OraculoColors.Error,
+                    modifier = Modifier.size(17.dp),
+                )
                 Text(
                     text = tr("Sair", "Exit"),
                     style = MaterialTheme.typography.labelMedium,
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = OraculoColors.OnSurface,
                     maxLines = 1,
@@ -1031,11 +1158,15 @@ internal fun ScreenStreamingScreen(
                     }
                     .pointerInput(viewportWidthPx, viewportHeightPx, fittedWidthPx, fittedHeightPx) {
                         detectTransformGestures { centroid, pan, zoom, _ ->
-                            zoomJob?.cancel()
+                            if (zoomJob != null) {
+                                zoomJob?.cancel()
+                            }
                             val oldScale = zoomScale
                             val nextScale = (oldScale * zoom).coerceIn(MIN_ZOOM_SCALE, MAX_ZOOM_SCALE)
                             if (nextScale <= 1.01f) {
-                                resetZoom(animated = false)
+                                if (oldScale > MIN_ZOOM_SCALE || panOffset != Offset.Zero) {
+                                    resetZoom(animated = false)
+                                }
                             } else {
                                 val ratio = nextScale / oldScale
                                 val center = Offset(viewportWidthPx / 2f, viewportHeightPx / 2f)
@@ -1346,7 +1477,7 @@ internal fun ScreenStreamingScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
-                                    if (zoomScale > 1.05f) {
+                                    if (isZoomed) {
                                         ZoomResetChip(pillHeight = railPillHeight)
                                     } else {
                                         StreamStatusChip(
@@ -1385,6 +1516,7 @@ internal fun ScreenStreamingScreen(
                                     pillHeight = railPillHeight,
                                     modifier = Modifier.weight(1f),
                                 )
+                                TutorialHelpChip(pillHeight = railPillHeight)
                             }
 
                             AnimatedVisibility(
@@ -1436,7 +1568,7 @@ internal fun ScreenStreamingScreen(
                                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
                                     ExitChip(compact = false)
-                                    if (zoomScale > 1.05f) {
+                                    if (isZoomed) {
                                         ZoomResetChip()
                                     } else {
                                         StreamStatusChip(compactText = true)
@@ -1449,6 +1581,7 @@ internal fun ScreenStreamingScreen(
                                 ) {
                                     MonitorSwitchChip(compact = true)
                                     PresetCycleChip()
+                                    TutorialHelpChip()
                                     RotateChip(showLabel = false)
                                 }
                             }
@@ -1586,39 +1719,510 @@ internal fun ScreenStreamingScreen(
                 },
             )
         }
+
+        if (showGestureTutorial) {
+            ScreenGestureTutorialDialog(onDismiss = ::dismissGestureTutorial)
+        }
     }
 }
 
 @Composable
-private fun StreamControlPill(
+private fun ScreenGestureTutorialDialog(
+    onDismiss: () -> Unit,
+) {
+    val isDark = OraculoColors.IsDark
+    val touchSurfaceColor = MaterialTheme.colorScheme.surfaceContainerHigh
+    val outlineColor = OraculoColors.Outline
+    val primaryColor = OraculoColors.Primary
+    val onSurfaceMuted = OraculoColors.OnSurfaceMuted
+    val fingerFillColor = if (isDark) {
+        primaryColor.copy(alpha = 0.24f)
+    } else {
+        primaryColor.copy(alpha = 0.16f)
+    }
+    val fingerStrokeColor = primaryColor
+    val nailColor = primaryColor.copy(alpha = 0.45f)
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            val useSideBySide = maxWidth >= 520.dp
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = OraculoColors.Surface,
+                tonalElevation = 2.dp,
+                border = BorderStroke(1.dp, outlineColor),
+                modifier = Modifier.widthIn(max = if (useSideBySide) 620.dp else 400.dp),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = tr("Gestos no Modo Tela", "Screen Mode Gestures"),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = OraculoColors.OnSurface,
+                        )
+                        Text(
+                            text = tr(
+                                "Toques rápidos para rolar e ampliar sem esforço.",
+                                "Quick gestures to scroll and zoom effortlessly.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = onSurfaceMuted,
+                        )
+                    }
+
+                    val scrollCard: @Composable (Modifier) -> Unit = { cardModifier ->
+                        GestureTutorialCard(
+                            title = tr("Scroll com 2 polegares no touch", "2-thumb scroll on touchpad"),
+                            description = tr(
+                                "Arraste os dois polegares juntos no touchpad para rolar páginas e listas.",
+                                "Drag both thumbs together on the touchpad to scroll pages and lists.",
+                            ),
+                            containerColor = touchSurfaceColor,
+                            borderColor = outlineColor,
+                            modifier = cardModifier,
+                        ) { canvasModifier ->
+                            TwoThumbsScrollIllustration(
+                                touchpadColor = OraculoColors.Surface,
+                                outlineColor = outlineColor,
+                                accentColor = primaryColor,
+                                fingerFill = fingerFillColor,
+                                fingerStroke = fingerStrokeColor,
+                                nailColor = nailColor,
+                                modifier = canvasModifier,
+                            )
+                        }
+                    }
+                    val pinchCard: @Composable (Modifier) -> Unit = { cardModifier ->
+                        GestureTutorialCard(
+                            title = tr("Pinça direto na tela para zoom", "Pinch directly on screen to zoom"),
+                            description = tr(
+                                "Faça pinça no vídeo para dar zoom, arraste para mover e 2 toques ajusta 1x/2.5x.",
+                                "Pinch the video to zoom, drag to pan, and double-tap toggles 1x/2.5x.",
+                            ),
+                            containerColor = touchSurfaceColor,
+                            borderColor = outlineColor,
+                            modifier = cardModifier,
+                        ) { canvasModifier ->
+                            PinchScreenZoomIllustration(
+                                outlineColor = outlineColor,
+                                accentColor = primaryColor,
+                                fingerFill = fingerFillColor,
+                                fingerStroke = fingerStrokeColor,
+                                nailColor = nailColor,
+                                modifier = canvasModifier,
+                            )
+                        }
+                    }
+
+                    if (useSideBySide) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            scrollCard(Modifier.weight(1f))
+                            pinchCard(Modifier.weight(1f))
+                        }
+                    } else {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            scrollCard(Modifier.fillMaxWidth())
+                            pinchCard(Modifier.fillMaxWidth())
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        Button(
+                            onClick = onDismiss,
+                            colors = oraculoPrimaryButtonColors(),
+                            shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                        ) {
+                            Text(tr("Entendi", "Got it"))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GestureTutorialCard(
+    title: String,
+    description: String,
+    containerColor: Color,
+    borderColor: Color,
     modifier: Modifier = Modifier,
-    onClick: (() -> Unit)? = null,
+    illustration: @Composable (Modifier) -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = containerColor,
+        border = BorderStroke(1.dp, borderColor),
+        modifier = modifier,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            illustration(
+                Modifier
+                    .fillMaxWidth()
+                    .height(100.dp),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = OraculoColors.OnSurface,
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OraculoColors.OnSurfaceMuted,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TwoThumbsScrollIllustration(
+    touchpadColor: Color,
+    outlineColor: Color,
+    accentColor: Color,
+    fingerFill: Color,
+    fingerStroke: Color,
+    nailColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier) {
+        val padW = minOf(size.width * 0.92f, size.height * 2.25f)
+        val padH = size.height * 0.86f
+        val left = (size.width - padW) / 2f
+        val top = (size.height - padH) / 2f
+        val radius = CornerRadius(12.dp.toPx(), 12.dp.toPx())
+
+        drawRoundRect(
+            color = touchpadColor,
+            topLeft = Offset(left, top),
+            size = Size(padW, padH),
+            cornerRadius = radius,
+        )
+        drawRoundRect(
+            color = outlineColor,
+            topLeft = Offset(left, top),
+            size = Size(padW, padH),
+            cornerRadius = radius,
+            style = Stroke(width = 1.25.dp.toPx()),
+        )
+
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+        val trackHalfH = padH * 0.29f
+        val strokePx = 2.dp.toPx()
+        val headPx = 5.5.dp.toPx()
+
+        // Eixo central indicando rolagem vertical (subir/descer) entre os dois polegares.
+        drawLine(
+            color = accentColor,
+            start = Offset(cx, cy - trackHalfH),
+            end = Offset(cx, cy + trackHalfH),
+            strokeWidth = strokePx,
+            cap = StrokeCap.Round,
+        )
+        drawChevronArrow(
+            tip = Offset(cx, cy - trackHalfH - 1.dp.toPx()),
+            dx = headPx,
+            dy = headPx,
+            pointUp = true,
+            color = accentColor,
+            strokeWidth = strokePx,
+        )
+        drawChevronArrow(
+            tip = Offset(cx, cy + trackHalfH + 1.dp.toPx()),
+            dx = headPx,
+            dy = headPx,
+            pointUp = false,
+            color = accentColor,
+            strokeWidth = strokePx,
+        )
+
+        clipRect(
+            left = left + 1.dp.toPx(),
+            top = top + 1.dp.toPx(),
+            right = left + padW - 1.dp.toPx(),
+            bottom = top + padH - 1.dp.toPx(),
+        ) {
+            val thumbW = (padH * 0.28f).coerceIn(16.dp.toPx(), 26.dp.toPx())
+            val thumbLen = padH * 0.68f
+            val tipY = cy - padH * 0.08f
+            val spreadX = minOf(padW * 0.21f, thumbW * 1.45f)
+
+            drawFingerSilhouette(
+                tipCenter = Offset(cx - spreadX, tipY),
+                widthPx = thumbW,
+                lengthPx = thumbLen,
+                angleDeg = 16f,
+                fillColor = fingerFill,
+                strokeColor = fingerStroke,
+                nailColor = nailColor,
+            )
+            drawFingerSilhouette(
+                tipCenter = Offset(cx + spreadX, tipY),
+                widthPx = thumbW,
+                lengthPx = thumbLen,
+                angleDeg = -16f,
+                fillColor = fingerFill,
+                strokeColor = fingerStroke,
+                nailColor = nailColor,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PinchScreenZoomIllustration(
+    outlineColor: Color,
+    accentColor: Color,
+    fingerFill: Color,
+    fingerStroke: Color,
+    nailColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    val dashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f) }
+
+    Canvas(modifier = modifier) {
+        val scrW = minOf(size.width * 0.92f, size.height * 2.05f)
+        val scrH = size.height * 0.88f
+        val left = (size.width - scrW) / 2f
+        val top = (size.height - scrH) / 2f
+        val radius = CornerRadius(11.dp.toPx(), 11.dp.toPx())
+
+        drawRoundRect(
+            color = Color(0xFF0E141E),
+            topLeft = Offset(left, top),
+            size = Size(scrW, scrH),
+            cornerRadius = radius,
+        )
+        drawRoundRect(
+            color = outlineColor,
+            topLeft = Offset(left, top),
+            size = Size(scrW, scrH),
+            cornerRadius = radius,
+            style = Stroke(width = 1.25.dp.toPx()),
+        )
+
+        // Detalhes sutis de janela de desktop para diferenciar a área de vídeo.
+        val barH = scrH * 0.16f
+        drawRoundRect(
+            color = Color.White.copy(alpha = 0.08f),
+            topLeft = Offset(left + 8.dp.toPx(), top + 6.dp.toPx()),
+            size = Size(scrW - 16.dp.toPx(), barH),
+            cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+        )
+        drawRoundRect(
+            color = Color.White.copy(alpha = 0.05f),
+            topLeft = Offset(left + 10.dp.toPx(), top + barH + 12.dp.toPx()),
+            size = Size(scrW * 0.42f, scrH * 0.56f),
+            cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx()),
+        )
+
+        val cx = size.width / 2f
+        val cy = top + scrH * 0.54f
+        val ringR = scrH * 0.21f
+        val strokePx = 1.8.dp.toPx()
+
+        drawCircle(
+            color = accentColor.copy(alpha = 0.45f),
+            radius = ringR,
+            center = Offset(cx, cy),
+            style = Stroke(width = 1.3.dp.toPx(), pathEffect = dashEffect),
+        )
+
+        // Setas diagonais indicando abertura/fechamento em pinça.
+        val arrowSpan = ringR * 0.68f
+        drawLine(
+            color = accentColor,
+            start = Offset(cx - arrowSpan * 0.35f, cy + arrowSpan * 0.24f),
+            end = Offset(cx - arrowSpan * 0.92f, cy + arrowSpan * 0.62f),
+            strokeWidth = strokePx,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = accentColor,
+            start = Offset(cx + arrowSpan * 0.35f, cy - arrowSpan * 0.24f),
+            end = Offset(cx + arrowSpan * 0.92f, cy - arrowSpan * 0.62f),
+            strokeWidth = strokePx,
+            cap = StrokeCap.Round,
+        )
+
+        clipRect(
+            left = left + 1.dp.toPx(),
+            top = top + 1.dp.toPx(),
+            right = left + scrW - 1.dp.toPx(),
+            bottom = top + scrH - 1.dp.toPx(),
+        ) {
+            val pinchDx = scrH * 0.26f
+            val pinchDy = scrH * 0.17f
+            val thumbW = (scrH * 0.24f).coerceIn(14.dp.toPx(), 22.dp.toPx())
+            val indexW = (thumbW * 0.84f).coerceAtLeast(12.dp.toPx())
+
+            // Polegar (inferior esquerdo) + indicador (superior direito) formando a pinça.
+            drawFingerSilhouette(
+                tipCenter = Offset(cx - pinchDx, cy + pinchDy),
+                widthPx = thumbW,
+                lengthPx = scrH * 0.56f,
+                angleDeg = 46f,
+                fillColor = fingerFill,
+                strokeColor = fingerStroke,
+                nailColor = nailColor,
+            )
+            drawFingerSilhouette(
+                tipCenter = Offset(cx + pinchDx, cy - pinchDy),
+                widthPx = indexW,
+                lengthPx = scrH * 0.56f,
+                angleDeg = -134f,
+                fillColor = fingerFill,
+                strokeColor = fingerStroke,
+                nailColor = nailColor,
+            )
+        }
+    }
+}
+
+private fun DrawScope.drawChevronArrow(
+    tip: Offset,
+    dx: Float,
+    dy: Float,
+    pointUp: Boolean,
+    color: Color,
+    strokeWidth: Float,
+) {
+    val dir = if (pointUp) 1f else -1f
+    drawLine(
+        color = color,
+        start = tip,
+        end = Offset(tip.x - dx, tip.y + dir * dy),
+        strokeWidth = strokeWidth,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = color,
+        start = tip,
+        end = Offset(tip.x + dx, tip.y + dir * dy),
+        strokeWidth = strokeWidth,
+        cap = StrokeCap.Round,
+    )
+}
+
+private fun DrawScope.drawFingerSilhouette(
+    tipCenter: Offset,
+    widthPx: Float,
+    lengthPx: Float,
+    angleDeg: Float,
+    fillColor: Color,
+    strokeColor: Color,
+    nailColor: Color,
+) {
+    // Halo sutil de toque na ponta do dedo.
+    drawCircle(
+        color = strokeColor.copy(alpha = 0.16f),
+        radius = widthPx * 0.62f,
+        center = tipCenter,
+    )
+    drawCircle(
+        color = strokeColor.copy(alpha = 0.50f),
+        radius = widthPx * 0.62f,
+        center = tipCenter,
+        style = Stroke(width = 1.2.dp.toPx()),
+    )
+
+    withTransform({
+        rotate(degrees = angleDeg, pivot = tipCenter)
+    }) {
+        val topOffset = widthPx * 0.48f
+        val bodyTopLeft = Offset(tipCenter.x - widthPx / 2f, tipCenter.y - topOffset)
+        val bodySize = Size(widthPx, lengthPx + topOffset)
+        val radius = CornerRadius(widthPx * 0.48f, widthPx * 0.48f)
+
+        drawRoundRect(
+            color = fillColor,
+            topLeft = bodyTopLeft,
+            size = bodySize,
+            cornerRadius = radius,
+        )
+        drawRoundRect(
+            color = strokeColor,
+            topLeft = bodyTopLeft,
+            size = bodySize,
+            cornerRadius = radius,
+            style = Stroke(width = 1.8.dp.toPx(), join = StrokeJoin.Round),
+        )
+
+        // Contorno da unha para identificar claramente o formato do dedo/polegar.
+        val nailW = widthPx * 0.58f
+        val nailH = widthPx * 0.44f
+        drawRoundRect(
+            color = nailColor,
+            topLeft = Offset(tipCenter.x - nailW / 2f, tipCenter.y - widthPx * 0.34f),
+            size = Size(nailW, nailH),
+            cornerRadius = CornerRadius(nailW * 0.45f, nailW * 0.45f),
+            style = Stroke(width = 1.25.dp.toPx()),
+        )
+
+        // Marca sutil da articulação do dedo.
+        val knuckleY = tipCenter.y + lengthPx * 0.36f
+        val knuckleHalf = widthPx * 0.22f
+        drawLine(
+            color = strokeColor.copy(alpha = 0.45f),
+            start = Offset(tipCenter.x - knuckleHalf, knuckleY),
+            end = Offset(tipCenter.x + knuckleHalf, knuckleY),
+            strokeWidth = 1.2.dp.toPx(),
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+@Composable
+private fun StreamToolbarButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     containerColor: Color = OraculoColors.Surface,
-    accentBorder: Color = OraculoColors.Outline,
     height: Dp = OraculoMetrics.ControlHeightSmall,
     content: @Composable () -> Unit,
 ) {
-    val (interactionSource, pressed) = rememberPressedInteraction()
-    val shape = RoundedCornerShape(OraculoMetrics.CornerSmall)
-    val base = modifier
-        .height(height)
-        .widthIn(min = height)
-        .oraculoPressScale(pressed && onClick != null)
-        .clip(shape)
-        .border(1.dp, accentBorder, shape)
-    val clickableModifier = if (onClick != null) {
-        base.clickable(
-            interactionSource = interactionSource,
-            indication = LocalIndication.current,
-            onClick = onClick,
-        )
-    } else {
-        base
-    }
     Surface(
+        onClick = onClick,
+        enabled = enabled,
         color = containerColor,
-        shape = shape,
-        modifier = clickableModifier,
+        shape = RoundedCornerShape(OraculoMetrics.CornerSmall),
+        modifier = modifier
+            .height(height)
+            .widthIn(min = height),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp),

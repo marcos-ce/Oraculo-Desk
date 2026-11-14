@@ -26,8 +26,29 @@ enum class AppLang(val prefValue: String, val badge: String) {
     }
 }
 
+enum class AppLangMode(
+    val prefValue: String,
+    private val ptLabel: String,
+    private val enLabel: String,
+) {
+    SYSTEM("system", "Auto", "Auto"),
+    PT("pt", "Português", "Português"),
+    EN("en", "English", "English");
+
+    val label: String
+        get() = tr(ptLabel, enLabel)
+
+    companion object {
+        fun fromPref(raw: String?): AppLangMode =
+            entries.firstOrNull { it.prefValue == raw } ?: SYSTEM
+    }
+}
+
 object AppI18n {
     private const val PREF_KEY_LANG = "app_lang"
+
+    var mode: AppLangMode by mutableStateOf(AppLangMode.SYSTEM)
+        private set
 
     var lang: AppLang by mutableStateOf(AppLang.defaultForDevice())
         private set
@@ -36,14 +57,21 @@ object AppI18n {
         get() = lang == AppLang.PT
 
     fun init(prefs: SharedPreferences) {
-        lang = AppLang.fromPref(prefs.getString(PREF_KEY_LANG, null))
+        val savedMode = AppLangMode.fromPref(prefs.getString(PREF_KEY_LANG, null))
+        mode = savedMode
+        lang = resolveLang(savedMode)
     }
 
-    fun toggle(prefs: SharedPreferences): AppLang {
-        val next = lang.next()
-        lang = next
-        prefs.edit().putString(PREF_KEY_LANG, next.prefValue).apply()
-        return next
+    fun setMode(prefs: SharedPreferences, nextMode: AppLangMode) {
+        mode = nextMode
+        lang = resolveLang(nextMode)
+        prefs.edit().putString(PREF_KEY_LANG, nextMode.prefValue).apply()
+    }
+
+    private fun resolveLang(mode: AppLangMode): AppLang = when (mode) {
+        AppLangMode.SYSTEM -> AppLang.defaultForDevice()
+        AppLangMode.PT -> AppLang.PT
+        AppLangMode.EN -> AppLang.EN
     }
 }
 

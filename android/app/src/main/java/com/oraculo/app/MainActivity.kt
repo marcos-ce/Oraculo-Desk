@@ -1,5 +1,7 @@
 package com.oraculo.app
 
+import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.os.Bundle
@@ -8,6 +10,14 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,31 +36,45 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,6 +84,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -67,29 +92,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.content.Context
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.LocalIndication
-import androidx.compose.material.icons.filled.BrightnessAuto
-import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.runtime.DisposableEffect
 import com.oraculo.app.ui.OraculoColors
 import com.oraculo.app.ui.OraculoMetrics
 import com.oraculo.app.ui.OraculoMotion
-import com.oraculo.app.ui.OraculoSquareIconButton
 import com.oraculo.app.ui.OraculoTheme
-import com.oraculo.app.ui.SleepingCatIllustration
+import com.oraculo.app.ui.JijiCatIllustration
 import com.oraculo.app.ui.ThemeMode
 import com.oraculo.app.ui.isOraculoDarkTheme
-import com.oraculo.app.ui.oraculoPressScale
-import com.oraculo.app.ui.rememberPressedInteraction
+import com.oraculo.app.ui.oraculoPrimaryButtonColors
+import com.oraculo.app.ui.oraculoSegmentedButtonColors
+import com.oraculo.app.ui.oraculoSegmentedItemShape
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -133,13 +145,12 @@ class MainActivity : ComponentActivity() {
             OraculoTheme(themeMode = themeMode) {
                 OraculoApp(
                     themeMode = themeMode,
-                    onCycleTheme = {
-                        val next = themeMode.next()
+                    onSelectTheme = { next ->
                         themeMode = next
                         prefs.edit().putString("theme_mode", next.prefValue).apply()
                     },
-                    onToggleLang = {
-                        AppI18n.toggle(prefs)
+                    onSelectLang = { next ->
+                        AppI18n.setMode(prefs, next)
                     },
                 )
             }
@@ -150,8 +161,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun OraculoApp(
     themeMode: ThemeMode,
-    onCycleTheme: () -> Unit,
-    onToggleLang: () -> Unit,
+    onSelectTheme: (ThemeMode) -> Unit,
+    onSelectLang: (AppLangMode) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -304,8 +315,8 @@ private fun OraculoApp(
                 DeviceListScreen(
                     hosts = savedHosts,
                     themeMode = themeMode,
-                    onCycleTheme = onCycleTheme,
-                    onToggleLang = onToggleLang,
+                    onSelectTheme = onSelectTheme,
+                    onSelectLang = onSelectLang,
                     snackbarHostState = snackbarHostState,
                     onSelectHost = { host -> route = AppRoute.HostControl(host) },
                     onScanQr = { route = AppRoute.QrScanner },
@@ -378,14 +389,11 @@ private fun OraculoApp(
                 }
             },
             confirmButton = {
+                val pairEnabled = manualUri.trim().startsWith("oraculo://pair?") && !isPairing
                 Button(
                     onClick = { pairWithUri(manualUri) },
-                    enabled = manualUri.trim().startsWith("oraculo://pair?") && !isPairing,
-                    shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = OraculoColors.Primary,
-                        contentColor = OraculoColors.OnPrimary,
-                    ),
+                    enabled = pairEnabled,
+                    colors = oraculoPrimaryButtonColors(),
                     modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
                 ) {
                     Text(if (isPairing) tr("Pareando...", "Pairing...") else tr("Parear", "Pair"))
@@ -483,14 +491,16 @@ private fun OraculoApp(
 private fun DeviceListScreen(
     hosts: List<SavedHostInfo>,
     themeMode: ThemeMode,
-    onCycleTheme: () -> Unit,
-    onToggleLang: () -> Unit,
+    onSelectTheme: (ThemeMode) -> Unit,
+    onSelectLang: (AppLangMode) -> Unit,
     snackbarHostState: SnackbarHostState,
     onSelectHost: (SavedHostInfo) -> Unit,
     onScanQr: () -> Unit,
     onOpenManualPair: () -> Unit,
     onDeleteHost: (SavedHostInfo) -> Unit,
 ) {
+    var showMenuSheet by remember { mutableStateOf(false) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -528,85 +538,16 @@ private fun DeviceListScreen(
                     )
                 }
 
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val headerShape = RoundedCornerShape(OraculoMetrics.CornerSmall)
-                    val (langSource, langPressed) = rememberPressedInteraction()
-                    Box(
-                        modifier = Modifier
-                            .height(OraculoMetrics.ControlHeightSmall)
-                            .oraculoPressScale(langPressed)
-                            .clip(headerShape)
-                            .background(OraculoColors.Surface)
-                            .border(1.dp, OraculoColors.Outline, headerShape)
-                            .clickable(
-                                interactionSource = langSource,
-                                indication = LocalIndication.current,
-                                onClick = onToggleLang,
-                            )
-                            .padding(horizontal = 10.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = AppI18n.lang.badge,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            color = OraculoColors.OnSurface,
-                        )
-                    }
-                    val (themeSource, themePressed) = rememberPressedInteraction()
-                    Row(
-                        modifier = Modifier
-                            .height(OraculoMetrics.ControlHeightSmall)
-                            .oraculoPressScale(themePressed)
-                            .clip(headerShape)
-                            .background(OraculoColors.Surface)
-                            .border(1.dp, OraculoColors.Outline, headerShape)
-                            .clickable(
-                                interactionSource = themeSource,
-                                indication = LocalIndication.current,
-                                onClick = onCycleTheme,
-                            )
-                            .padding(horizontal = 11.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    ) {
-                        Icon(
-                            imageVector = when (themeMode) {
-                                ThemeMode.SYSTEM -> Icons.Default.BrightnessAuto
-                                ThemeMode.LIGHT -> Icons.Default.LightMode
-                                ThemeMode.DARK -> Icons.Default.DarkMode
-                            },
-                            contentDescription = tr("Alternar tema", "Toggle theme"),
-                            tint = OraculoColors.OnSurfaceMuted,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Text(
-                            text = themeMode.label,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontSize = 12.sp,
-                            color = OraculoColors.OnSurface,
-                        )
-                    }
-                    OraculoSquareIconButton(
-                        onClick = onOpenManualPair,
-                        containerColor = OraculoColors.Surface,
-                        size = OraculoMetrics.ControlHeightSmall,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Link,
-                            contentDescription = tr("Colar link de pareamento", "Paste pairing link"),
-                            tint = OraculoColors.OnSurfaceMuted,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
+                IconButton(onClick = { showMenuSheet = true }) {
+                    Icon(
+                        imageVector = Icons.Default.Menu,
+                        contentDescription = tr("Abrir menu", "Open menu"),
+                        tint = OraculoColors.OnSurface,
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(22.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             if (hosts.isEmpty()) {
                 Box(
@@ -616,28 +557,29 @@ private fun DeviceListScreen(
                         .verticalScroll(rememberScrollState()),
                     contentAlignment = Alignment.Center,
                 ) {
+                    val cardShape = RoundedCornerShape(OraculoMetrics.CornerSurfaceExpanded)
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(20.dp))
+                            .clip(cardShape)
                             .background(OraculoColors.Surface)
-                            .border(1.dp, OraculoColors.Outline, RoundedCornerShape(20.dp))
-                            .padding(horizontal = 24.dp, vertical = 24.dp),
+                            .border(1.dp, OraculoColors.Outline, cardShape)
+                            .padding(horizontal = 24.dp, vertical = 32.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        SleepingCatIllustration(
+                        JijiCatIllustration(
                             modifier = Modifier
-                                .fillMaxWidth(0.78f)
-                                .widthIn(max = 224.dp),
+                                .fillMaxWidth(0.88f)
+                                .widthIn(max = 264.dp),
                         )
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
                         Text(
                             text = tr("Nenhum computador conectado", "No computers connected"),
                             style = MaterialTheme.typography.titleMedium,
                             color = OraculoColors.OnSurface,
                             textAlign = TextAlign.Center,
                         )
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = tr(
                                 "Rode oraculo-host serve --pair no computador e leia o QR Code.",
@@ -654,68 +596,68 @@ private fun DeviceListScreen(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
-                    item {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(22.dp))
-                                .background(OraculoColors.Surface)
-                                .border(1.dp, OraculoColors.Outline, RoundedCornerShape(22.dp)),
+                    itemsIndexed(hosts, key = { _, host -> host.endpointId }) { index, host ->
+                        val itemShape = remember(index, hosts.size) {
+                            oraculoSegmentedItemShape(index, hosts.size)
+                        }
+                        Surface(
+                            onClick = { onSelectHost(host) },
+                            color = OraculoColors.Surface,
+                            shape = itemShape,
+                            border = BorderStroke(1.dp, OraculoColors.Outline),
+                            modifier = Modifier.fillMaxWidth(),
                         ) {
-                            hosts.forEachIndexed { index, host ->
-                                Row(
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { onSelectHost(host) }
-                                        .padding(horizontal = 18.dp, vertical = 16.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
+                                        .size(40.dp)
+                                        .clip(RoundedCornerShape(OraculoMetrics.CornerMedium))
+                                        .background(OraculoColors.SecondaryContainer),
+                                    contentAlignment = Alignment.Center,
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(9.dp)
-                                            .clip(CircleShape)
-                                            .background(OraculoColors.Primary)
-                                    )
-                                    Spacer(modifier = Modifier.width(14.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = host.hostName,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = OraculoColors.OnSurface,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Text(
-                                            text = host.endpointId.take(14),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontFamily = FontFamily.Monospace,
-                                            color = OraculoColors.OnSurfaceMuted,
-                                        )
-                                    }
-                                    OraculoSquareIconButton(
-                                        onClick = { onDeleteHost(host) },
-                                        size = OraculoMetrics.ControlHeightSmall,
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.DeleteOutline,
-                                            contentDescription = tr("Remover ${host.hostName}", "Remove ${host.hostName}"),
-                                            tint = OraculoColors.OnSurfaceMuted,
-                                            modifier = Modifier.size(19.dp),
-                                        )
-                                    }
                                     Icon(
-                                        imageVector = Icons.Default.ChevronRight,
+                                        imageVector = Icons.Default.DesktopWindows,
                                         contentDescription = null,
+                                        tint = OraculoColors.OnSecondaryContainer,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(14.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = host.hostName,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = OraculoColors.OnSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = host.endpointId.take(14),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = OraculoColors.OnSurfaceMuted,
+                                    )
+                                }
+                                IconButton(onClick = { onDeleteHost(host) }) {
+                                    Icon(
+                                        imageVector = Icons.Default.DeleteOutline,
+                                        contentDescription = tr("Remover ${host.hostName}", "Remove ${host.hostName}"),
                                         tint = OraculoColors.OnSurfaceMuted,
                                     )
                                 }
-                                if (index < hosts.lastIndex) {
-                                    HorizontalDivider(color = OraculoColors.Outline, thickness = 1.dp)
-                                }
+                                Icon(
+                                    imageVector = Icons.Default.ChevronRight,
+                                    contentDescription = null,
+                                    tint = OraculoColors.OnSurfaceMuted,
+                                )
                             }
                         }
                     }
@@ -732,10 +674,7 @@ private fun DeviceListScreen(
             ) {
                 Button(
                     onClick = onScanQr,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = OraculoColors.Primary,
-                        contentColor = OraculoColors.OnPrimary,
-                    ),
+                    colors = oraculoPrimaryButtonColors(),
                     shape = RoundedCornerShape(OraculoMetrics.CornerLarge),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -757,6 +696,7 @@ private fun DeviceListScreen(
                 if (hosts.isEmpty()) {
                     OutlinedButton(
                         onClick = onOpenManualPair,
+                        border = BorderStroke(1.dp, OraculoColors.Outline),
                         shape = RoundedCornerShape(OraculoMetrics.CornerLarge),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -779,5 +719,201 @@ private fun DeviceListScreen(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 86.dp),
         )
+
+        if (showMenuSheet) {
+            OraculoSettingsSheet(
+                themeMode = themeMode,
+                langMode = AppI18n.mode,
+                onSelectTheme = onSelectTheme,
+                onSelectLang = onSelectLang,
+                onOpenManualPair = {
+                    showMenuSheet = false
+                    onOpenManualPair()
+                },
+                onDismiss = { showMenuSheet = false },
+            )
+        }
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OraculoSettingsSheet(
+    themeMode: ThemeMode,
+    langMode: AppLangMode,
+    onSelectTheme: (ThemeMode) -> Unit,
+    onSelectLang: (AppLangMode) -> Unit,
+    onOpenManualPair: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val context = LocalContext.current
+    val versionName = remember(context) { readAppVersionName(context) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = OraculoColors.Surface,
+        contentColor = OraculoColors.OnSurface,
+        shape = RoundedCornerShape(
+            topStart = OraculoMetrics.CornerSurfaceExpanded,
+            topEnd = OraculoMetrics.CornerSurfaceExpanded,
+        ),
+        dragHandle = {
+            BottomSheetDefaults.DragHandle(color = OraculoColors.Outline)
+        },
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                text = tr("Configurações", "Settings"),
+                style = MaterialTheme.typography.titleLarge,
+                color = OraculoColors.OnSurface,
+            )
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = tr("Aparência", "Appearance"),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = OraculoColors.OnSurfaceMuted,
+                )
+                OraculoSegmentedSelector(
+                    items = ThemeMode.entries,
+                    selected = themeMode,
+                    labelOf = { it.label },
+                    onSelect = onSelectTheme,
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = tr("Idioma", "Language"),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = OraculoColors.OnSurfaceMuted,
+                )
+                OraculoSegmentedSelector(
+                    items = AppLangMode.entries,
+                    selected = langMode,
+                    labelOf = { it.label },
+                    onSelect = onSelectLang,
+                )
+            }
+
+            HorizontalDivider(thickness = 1.dp, color = OraculoColors.Outline)
+
+            ListItem(
+                headlineContent = {
+                    Text(
+                        text = tr("Colar link de pareamento", "Paste pairing link"),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontSize = 15.sp,
+                    )
+                },
+                supportingContent = {
+                    Text(
+                        text = "oraculo://pair?...",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                },
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Default.Link,
+                        contentDescription = null,
+                        tint = OraculoColors.Primary,
+                    )
+                },
+                trailingContent = {
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                    )
+                },
+                colors = ListItemDefaults.colors(
+                    containerColor = Color.Transparent,
+                    headlineColor = OraculoColors.OnSurface,
+                    supportingColor = OraculoColors.OnSurfaceMuted,
+                    trailingIconColor = OraculoColors.OnSurfaceMuted,
+                ),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(OraculoMetrics.CornerMedium))
+                    .clickable(onClick = onOpenManualPair),
+            )
+
+            ListItem(
+                headlineContent = {
+                    Text(
+                        text = tr("Versão do app", "App version"),
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontSize = 15.sp,
+                    )
+                },
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Outlined.Info,
+                        contentDescription = null,
+                        tint = OraculoColors.OnSurfaceMuted,
+                    )
+                },
+                trailingContent = {
+                    Text(
+                        text = "Oráculo v$versionName",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = FontFamily.Monospace,
+                        color = OraculoColors.OnSurfaceMuted,
+                    )
+                },
+                colors = ListItemDefaults.colors(
+                    containerColor = Color.Transparent,
+                    headlineColor = OraculoColors.OnSurface,
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun <T> OraculoSegmentedSelector(
+    items: List<T>,
+    selected: T,
+    labelOf: (T) -> String,
+    onSelect: (T) -> Unit,
+) {
+    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        items.forEachIndexed { index, item ->
+            val isSelected = item == selected
+            SegmentedButton(
+                selected = isSelected,
+                onClick = { onSelect(item) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = items.size),
+                colors = oraculoSegmentedButtonColors(),
+                icon = { SegmentedButtonDefaults.Icon(active = isSelected) },
+                label = {
+                    Text(
+                        text = labelOf(item),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+            )
+        }
+    }
+}
+
+private fun readAppVersionName(context: Context): String = runCatching {
+    val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        context.packageManager.getPackageInfo(
+            context.packageName,
+            PackageManager.PackageInfoFlags.of(0),
+        )
+    } else {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0)
+    }
+    info.versionName?.takeIf { it.isNotBlank() } ?: "0.1.0"
+}.getOrDefault("0.1.0")

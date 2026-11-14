@@ -2,10 +2,9 @@ package com.oraculo.app
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,8 +27,7 @@ import androidx.compose.ui.graphics.SolidColor
 import com.oraculo.app.ui.OraculoColors
 import com.oraculo.app.ui.OraculoMetrics
 import com.oraculo.app.ui.OraculoMotion
-import com.oraculo.app.ui.oraculoPressScale
-import com.oraculo.app.ui.rememberPressedInteraction
+import com.oraculo.app.ui.oraculoPrimaryButtonColors
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -45,7 +43,6 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -344,12 +341,11 @@ internal fun RemoteModifierRow(
         val shape = RoundedCornerShape(OraculoMetrics.CornerSmall)
         StickyModifier.entries.forEach { mod ->
             val state = controller.modifierStates[mod] ?: ModifierLatchState.OFF
-            val (interactionSource, pressed) = rememberPressedInteraction()
             val bg by animateColorAsState(
                 targetValue = when (state) {
                     ModifierLatchState.OFF -> OraculoColors.Surface
                     ModifierLatchState.ARMED -> OraculoColors.SecondaryContainer
-                    ModifierLatchState.LOCKED -> OraculoColors.Primary
+                    ModifierLatchState.LOCKED -> OraculoColors.PrimaryAction
                 },
                 animationSpec = OraculoMotion.microTween(),
                 label = "modBg",
@@ -367,30 +363,24 @@ internal fun RemoteModifierRow(
                 targetValue = when (state) {
                     ModifierLatchState.OFF -> OraculoColors.OnSurface
                     ModifierLatchState.ARMED -> OraculoColors.Primary
-                    ModifierLatchState.LOCKED -> OraculoColors.OnPrimary
+                    ModifierLatchState.LOCKED -> OraculoColors.OnPrimaryAction
                 },
                 animationSpec = OraculoMotion.microTween(),
                 label = "modText",
             )
             val baseLabel = if (compact) mod.compactLabel else mod.label
             Surface(
+                onClick = { controller.onModifierTap(mod) },
+                enabled = enabled,
                 color = bg,
                 shape = shape,
+                border = BorderStroke(
+                    width = if (state == ModifierLatchState.ARMED) 1.5.dp else 1.dp,
+                    color = borderColor,
+                ),
                 modifier = Modifier
                     .weight(1f)
-                    .height(chipHeight)
-                    .oraculoPressScale(pressed && enabled)
-                    .clip(shape)
-                    .border(
-                        width = if (state == ModifierLatchState.ARMED) 1.5.dp else 1.dp,
-                        color = borderColor,
-                        shape = shape,
-                    )
-                    .clickable(
-                        interactionSource = interactionSource,
-                        indication = LocalIndication.current,
-                        enabled = enabled,
-                    ) { controller.onModifierTap(mod) },
+                    .height(chipHeight),
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = if (compact) 4.dp else 6.dp),
@@ -420,21 +410,15 @@ internal fun RemoteModifierRow(
             }
         }
 
-        val (backspaceSource, backspacePressed) = rememberPressedInteraction()
         Surface(
+            onClick = { controller.sendBackspace() },
+            enabled = enabled,
             color = OraculoColors.Surface,
             shape = shape,
+            border = BorderStroke(1.dp, OraculoColors.Outline),
             modifier = Modifier
                 .weight(0.68f)
-                .height(chipHeight)
-                .oraculoPressScale(backspacePressed && enabled)
-                .clip(shape)
-                .border(1.dp, OraculoColors.Outline, shape)
-                .clickable(
-                    interactionSource = backspaceSource,
-                    indication = LocalIndication.current,
-                    enabled = enabled,
-                ) { controller.sendBackspace() },
+                .height(chipHeight),
         ) {
             Box(
                 contentAlignment = Alignment.Center,
@@ -533,20 +517,13 @@ internal fun RemoteShortcutStrip(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         shortcuts.forEach { item ->
-            val (interactionSource, pressed) = rememberPressedInteraction()
             Surface(
+                onClick = { controller.executeShortcut(item) },
+                enabled = enabled,
                 color = OraculoColors.SurfaceRecessed,
                 shape = shape,
-                modifier = Modifier
-                    .height(chipHeight)
-                    .oraculoPressScale(pressed && enabled)
-                    .clip(shape)
-                    .border(1.dp, OraculoColors.Outline, shape)
-                    .clickable(
-                        interactionSource = interactionSource,
-                        indication = LocalIndication.current,
-                        enabled = enabled,
-                    ) { controller.executeShortcut(item) },
+                border = BorderStroke(1.dp, OraculoColors.Outline),
+                modifier = Modifier.height(chipHeight),
             ) {
                 if (item.icon != null) {
                     Row(
@@ -767,10 +744,7 @@ internal fun RemoteKeyboardBar(
             Button(
                 onClick = { controller.sendEnterAndClear() },
                 enabled = enabled,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = OraculoColors.Primary,
-                    contentColor = OraculoColors.OnPrimary,
-                ),
+                colors = oraculoPrimaryButtonColors(),
                 shape = fieldShape,
                 contentPadding = PaddingValues(horizontal = if (compact) 14.dp else 16.dp),
                 modifier = Modifier
