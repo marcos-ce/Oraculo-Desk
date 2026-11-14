@@ -50,7 +50,7 @@ Before finishing any code change, run `./scripts/build.sh test` and, whenever `c
   - Never edit generated files under `android/app/src/main/java/uniffi/` by hand; `uniffi-bindgen` overwrites them.
 
 - `android/app/src/main/java/com/oraculo/app`:
-  - `MainActivity.kt`: host list, empty state (`SleepingCatIllustration`), QR scanner (`QrScannerScreen.kt`), manual pairing dialog, theme & `PT`/`EN` language switcher.
+  - `MainActivity.kt`: host list, empty state (`JijiCatIllustration`), QR scanner (`QrScannerScreen.kt`), manual pairing dialog, theme & `PT`/`EN` language switcher.
   - `HostControlScreen.kt`: connected dashboard with 4 tabs (`Touchpad`, `Terminal`, `Commands`, `Files`), RTT latency badge, and `OraculoSessionService` lifecycle.
   - `ScreenStreamingScreen.kt` & `ScreenVideoDecoder.kt`: hardware `MediaCodec` (`video/avc`) rendering onto `SurfaceView`, relative trackpad & direct touch input, pinch-to-zoom, quality presets (`1080p30`, `1080p60`, `720p30`), monitor switcher, and fullscreen landscape mode.
   - `RemoteInputDeck.kt`: virtual modifier & media/navigation strip on mobile.

@@ -14,6 +14,7 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -76,6 +77,7 @@ import com.google.zxing.common.GlobalHistogramBinarizer
 import com.google.zxing.common.HybridBinarizer
 import com.oraculo.app.ui.OraculoColors
 import com.oraculo.app.ui.OraculoMetrics
+import com.oraculo.app.ui.oraculoPrimaryButtonColors
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -231,10 +233,7 @@ fun QrScannerScreen(
                     Button(
                         onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
                         shape = RoundedCornerShape(OraculoMetrics.CornerLarge),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = OraculoColors.Primary,
-                            contentColor = OraculoColors.OnPrimary,
-                        ),
+                        colors = oraculoPrimaryButtonColors(),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(OraculoMetrics.ControlHeightCta),
@@ -244,6 +243,7 @@ fun QrScannerScreen(
                     Spacer(modifier = Modifier.height(10.dp))
                     OutlinedButton(
                         onClick = onOpenManualInput,
+                        border = BorderStroke(1.dp, OraculoColors.Outline),
                         shape = RoundedCornerShape(OraculoMetrics.CornerLarge),
                         modifier = Modifier
                             .fillMaxWidth()

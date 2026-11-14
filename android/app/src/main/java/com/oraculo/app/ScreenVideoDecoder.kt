@@ -189,7 +189,7 @@ class ScreenVideoDecoder(
         }
     }
 
-    fun release() {
+    fun release(surfaceToRelease: Surface? = null) {
         var staleCodec: MediaCodec? = null
         synchronized(lock) {
             if (released) return
@@ -197,8 +197,22 @@ class ScreenVideoDecoder(
             surface = null
             staleCodec = releaseCodecStateLocked()
         }
-        stopAndReleaseCodec(staleCodec)
-        codecThread.quitSafely()
+        val posted = codecHandler.post {
+            try {
+                stopAndReleaseCodec(staleCodec)
+            } finally {
+                runCatching { surfaceToRelease?.release() }
+                codecThread.quitSafely()
+            }
+        }
+        if (!posted) {
+            try {
+                stopAndReleaseCodec(staleCodec)
+            } finally {
+                runCatching { surfaceToRelease?.release() }
+                codecThread.quitSafely()
+            }
+        }
     }
 
     private data class FeedOutcome(

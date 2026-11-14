@@ -18,7 +18,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,6 +25,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -64,8 +64,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -101,9 +105,7 @@ import androidx.core.content.FileProvider
 import com.oraculo.app.ui.OraculoColors
 import com.oraculo.app.ui.OraculoMetrics
 import com.oraculo.app.ui.OraculoMotion
-import com.oraculo.app.ui.OraculoSquareIconButton
-import com.oraculo.app.ui.oraculoPressScale
-import com.oraculo.app.ui.rememberPressedInteraction
+import com.oraculo.app.ui.oraculoPrimaryButtonColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -460,22 +462,21 @@ internal fun FilesTab(
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            OraculoSquareIconButton(
+            IconButton(
                 onClick = {
-                    val parent = listing?.parentPath ?: return@OraculoSquareIconButton
+                    val parent = listing?.parentPath ?: return@IconButton
                     loadDirectory(parent)
                 },
                 enabled = listing?.parentPath != null && !isLoading,
-                containerColor = OraculoColors.Surface,
-                size = OraculoMetrics.ControlHeightSmall,
+                modifier = Modifier.size(38.dp),
             ) {
                 Icon(
                     imageVector = Icons.Default.ArrowUpward,
                     contentDescription = tr("Pasta acima", "Parent folder"),
                     tint = if (listing?.parentPath != null) OraculoColors.OnSurface else OraculoColors.OnSurfaceMuted.copy(alpha = 0.4f),
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(20.dp),
                 )
             }
 
@@ -496,98 +497,113 @@ internal fun FilesTab(
                 )
             }
 
-            OraculoSquareIconButton(
-                onClick = {
-                    if (isSearchOpen || searchQuery.isNotEmpty()) {
+            val searchActive = isSearchOpen || searchQuery.isNotEmpty()
+            if (searchActive) {
+                FilledTonalIconButton(
+                    onClick = {
                         isSearchOpen = false
                         searchQuery = ""
-                    } else {
-                        isSearchOpen = true
-                    }
-                },
-                active = isSearchOpen || searchQuery.isNotEmpty(),
-                size = OraculoMetrics.ControlHeightSmall,
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = "Filtrar arquivos",
-                    tint = if (isSearchOpen || searchQuery.isNotEmpty()) OraculoColors.Primary else OraculoColors.OnSurfaceMuted,
-                    modifier = Modifier.size(18.dp),
-                )
+                    },
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = OraculoColors.SecondaryContainer,
+                        contentColor = OraculoColors.OnSecondaryContainer,
+                    ),
+                    modifier = Modifier.size(38.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Filtrar arquivos",
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            } else {
+                IconButton(
+                    onClick = { isSearchOpen = true },
+                    modifier = Modifier.size(38.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Filtrar arquivos",
+                        tint = OraculoColors.OnSurfaceMuted,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
             }
 
-            OraculoSquareIconButton(
-                onClick = {
-                    val nextHidden = !showHidden
-                    showHidden = nextHidden
-                    loadDirectory(currentPath, hidden = nextHidden)
-                },
-                active = showHidden,
-                size = OraculoMetrics.ControlHeightSmall,
-            ) {
-                Icon(
-                    imageVector = if (showHidden) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                    contentDescription = if (showHidden) "Ocultar arquivos iniciados por ." else "Mostrar arquivos ocultos",
-                    tint = if (showHidden) OraculoColors.Primary else OraculoColors.OnSurfaceMuted,
-                    modifier = Modifier.size(18.dp),
-                )
+            if (showHidden) {
+                FilledTonalIconButton(
+                    onClick = {
+                        showHidden = false
+                        loadDirectory(currentPath, hidden = false)
+                    },
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = OraculoColors.SecondaryContainer,
+                        contentColor = OraculoColors.OnSecondaryContainer,
+                    ),
+                    modifier = Modifier.size(38.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Visibility,
+                        contentDescription = "Ocultar arquivos iniciados por .",
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            } else {
+                IconButton(
+                    onClick = {
+                        showHidden = true
+                        loadDirectory(currentPath, hidden = true)
+                    },
+                    modifier = Modifier.size(38.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.VisibilityOff,
+                        contentDescription = "Mostrar arquivos ocultos",
+                        tint = OraculoColors.OnSurfaceMuted,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
             }
 
-            OraculoSquareIconButton(
+            IconButton(
                 onClick = { loadDirectory(currentPath) },
                 enabled = !isLoading,
-                size = OraculoMetrics.ControlHeightSmall,
+                modifier = Modifier.size(38.dp),
             ) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
                     contentDescription = "Atualizar pasta",
                     tint = OraculoColors.OnSurfaceMuted,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(19.dp),
                 )
             }
 
-            val (uploadSource, uploadPressed) = rememberPressedInteraction()
-            val uploadShape = RoundedCornerShape(OraculoMetrics.CornerSmall)
-            Surface(
-                color = OraculoColors.Primary,
-                shape = uploadShape,
-                modifier = Modifier
-                    .height(OraculoMetrics.ControlHeightSmall)
-                    .oraculoPressScale(uploadPressed && transferState == null)
-                    .clip(uploadShape)
-                    .clickable(
-                        interactionSource = uploadSource,
-                        indication = LocalIndication.current,
-                        enabled = transferState == null,
-                    ) {
-                        uploadLauncher.launch(arrayOf("*/*"))
-                    },
+            val uploadEnabled = transferState == null
+            Button(
+                onClick = { uploadLauncher.launch(arrayOf("*/*")) },
+                enabled = uploadEnabled,
+                colors = oraculoPrimaryButtonColors(),
+                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(OraculoMetrics.ControlHeightSmall),
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Upload,
-                        contentDescription = null,
-                        tint = OraculoColors.OnPrimary,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                        text = tr("Enviar", "Upload"),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontSize = 13.sp,
-                        color = OraculoColors.OnPrimary,
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Default.Upload,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = tr("Enviar", "Upload"),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontSize = 13.sp,
+                )
             }
         }
 
         // Atalhos rápidos + Breadcrumb
         val quickPaths = listing?.quickPaths.orEmpty()
         if (quickPaths.isNotEmpty() || currentPath.isNotEmpty()) {
-            val quickShape = RoundedCornerShape(OraculoMetrics.CornerSmall)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -597,46 +613,42 @@ internal fun FilesTab(
             ) {
                 quickPaths.forEach { quick ->
                     val selected = currentPath == quick.relPath
-                    val (chipSource, chipPressed) = rememberPressedInteraction()
-                    Surface(
-                        color = if (selected) OraculoColors.SecondaryContainer else OraculoColors.Surface,
-                        shape = quickShape,
-                        modifier = Modifier
-                            .height(OraculoMetrics.ControlHeightCompactChip)
-                            .oraculoPressScale(chipPressed && !isLoading)
-                            .clip(quickShape)
-                            .border(
-                                1.dp,
-                                if (selected) OraculoColors.Primary else OraculoColors.Outline,
-                                quickShape,
-                            )
-                            .clickable(
-                                interactionSource = chipSource,
-                                indication = LocalIndication.current,
-                                enabled = !isLoading,
-                            ) { loadDirectory(quick.relPath) },
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            if (quick.relPath.isEmpty()) {
+                    FilterChip(
+                        selected = selected,
+                        onClick = { loadDirectory(quick.relPath) },
+                        enabled = !isLoading,
+                        leadingIcon = if (quick.relPath.isEmpty()) {
+                            {
                                 Icon(
                                     imageVector = Icons.Default.Home,
                                     contentDescription = null,
-                                    tint = if (selected) OraculoColors.Primary else OraculoColors.OnSurfaceMuted,
-                                    modifier = Modifier.size(13.dp),
+                                    modifier = Modifier.size(FilterChipDefaults.IconSize),
                                 )
                             }
+                        } else {
+                            null
+                        },
+                        label = {
                             Text(
                                 text = quick.name,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (selected) OraculoColors.Primary else OraculoColors.OnSurface,
                                 maxLines = 1,
                             )
-                        }
-                    }
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = OraculoColors.Surface,
+                            labelColor = OraculoColors.OnSurface,
+                            selectedContainerColor = OraculoColors.SecondaryContainer,
+                            selectedLabelColor = OraculoColors.OnSecondaryContainer,
+                            selectedLeadingIconColor = OraculoColors.OnSecondaryContainer,
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = !isLoading,
+                            selected = selected,
+                            borderColor = OraculoColors.Outline,
+                            selectedBorderColor = OraculoColors.SecondaryContainer,
+                        ),
+                        modifier = Modifier.height(OraculoMetrics.ControlHeightCompactChip),
+                    )
                 }
             }
         }
@@ -930,10 +942,7 @@ private fun FileEntryActionDialog(
 
                 Button(
                     onClick = onDownload,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = OraculoColors.Primary,
-                        contentColor = OraculoColors.OnPrimary,
-                    ),
+                    colors = oraculoPrimaryButtonColors(),
                     shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                     modifier = Modifier
                         .fillMaxWidth()

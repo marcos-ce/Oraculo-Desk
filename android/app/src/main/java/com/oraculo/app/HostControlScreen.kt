@@ -8,8 +8,8 @@ import android.os.Looper
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,7 +36,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -78,13 +77,24 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -145,25 +155,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import com.oraculo.app.ui.OraculoColors
 import com.oraculo.app.ui.OraculoDeckButton
 import com.oraculo.app.ui.OraculoMetrics
 import com.oraculo.app.ui.OraculoMotion
-import com.oraculo.app.ui.OraculoSquareIconButton
 import com.oraculo.app.ui.PtyxisPalette
-import com.oraculo.app.ui.oraculoPressScale
+import com.oraculo.app.ui.oraculoPrimaryButtonColors
+import com.oraculo.app.ui.oraculoSegmentedButtonColors
 import com.oraculo.app.ui.ptyxisPaletteFor
-import com.oraculo.app.ui.rememberPressedInteraction
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -344,65 +348,50 @@ fun HostControlScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 8.dp),
+                .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            OraculoSquareIconButton(
-                onClick = onBack,
-                size = OraculoMetrics.ControlHeightSmall,
-            ) {
+            IconButton(onClick = onBack) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Voltar",
                     tint = OraculoColors.OnSurface,
-                    modifier = Modifier.size(20.dp),
                 )
             }
 
-            Text(
-                text = host.hostName,
-                style = MaterialTheme.typography.titleLarge,
-                color = OraculoColors.OnSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-
-            val (pingSource, pingPressed) = rememberPressedInteraction()
-            val msLabel = when {
-                isPinging && (isConnected != true || latencyMs == null) -> "..."
-                isConnected == true && latencyMs == 0uL -> "<1 ms"
-                isConnected == true && latencyMs != null -> "${latencyMs} ms"
-                isConnected == false -> "offline"
+            val statusSubtitle = when {
+                isPinging && (isConnected != true || latencyMs == null) -> tr("Testando conexão...", "Checking connection...")
+                isConnected == true && latencyMs == 0uL -> "<1 ms · Online"
+                isConnected == true && latencyMs != null -> "${latencyMs} ms · Online"
+                isConnected == false -> tr("Offline · toque para testar", "Offline · tap to retry")
                 else -> "..."
             }
-            Box(
-                contentAlignment = Alignment.Center,
+            Column(
                 modifier = Modifier
-                    .height(OraculoMetrics.ControlHeightSmall)
-                    .oraculoPressScale(pingPressed)
+                    .weight(1f)
                     .clip(RoundedCornerShape(OraculoMetrics.CornerSmall))
-                    .clickable(
-                        interactionSource = pingSource,
-                        indication = LocalIndication.current,
-                    ) { refreshPing(manual = true) }
-                    .padding(horizontal = 6.dp),
+                    .clickable { refreshPing(manual = true) }
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
             ) {
                 Text(
-                    text = msLabel,
+                    text = host.hostName,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontSize = 19.sp,
+                    color = OraculoColors.OnSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = statusSubtitle,
                     style = TextStyle(
                         fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
+                        fontSize = 11.5.sp,
                         fontFeatureSettings = "tnum",
                     ),
+                    color = if (isConnected == false) OraculoColors.Error else OraculoColors.OnSurfaceMuted,
                     maxLines = 1,
-                    softWrap = false,
                     overflow = TextOverflow.Ellipsis,
-                    color = when (isConnected) {
-                        false -> OraculoColors.Error
-                        else -> OraculoColors.OnSurfaceMuted
-                    },
                 )
             }
 
@@ -411,31 +400,38 @@ fun HostControlScreen(
                 enter = OraculoMotion.ExpandH,
                 exit = OraculoMotion.CollapseH,
             ) {
-                OraculoSquareIconButton(
-                    onClick = { showTouchpadSettings = !showTouchpadSettings },
-                    active = showTouchpadSettings,
-                    containerColor = OraculoColors.Surface,
-                    size = OraculoMetrics.ControlHeightSmall,
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Tune,
-                        contentDescription = "Ajustes do touchpad",
-                        tint = if (showTouchpadSettings) OraculoColors.Primary else OraculoColors.OnSurfaceMuted,
-                        modifier = Modifier.size(18.dp),
-                    )
+                if (showTouchpadSettings) {
+                    FilledTonalIconButton(
+                        onClick = { showTouchpadSettings = false },
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = OraculoColors.SecondaryContainer,
+                            contentColor = OraculoColors.OnSecondaryContainer,
+                        ),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = "Ajustes do touchpad",
+                        )
+                    }
+                } else {
+                    IconButton(onClick = { showTouchpadSettings = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = "Ajustes do touchpad",
+                            tint = OraculoColors.OnSurfaceMuted,
+                        )
+                    }
                 }
             }
         }
 
-        ModeCapsuleBar(
+        ControlTabRow(
             selected = selectedTab,
             onSelect = { selectedTab = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 2.dp),
+            modifier = Modifier.fillMaxWidth(),
         )
 
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
         KeepAliveControlTabs(
             selectedTab = selectedTab,
@@ -456,6 +452,7 @@ fun HostControlScreen(
                 ControlTab.TERMINAL -> TerminalTab(
                     client = client,
                     host = host,
+                    isActive = selectedTab == ControlTab.TERMINAL && !isStreamingMode,
                     modifier = Modifier.fillMaxSize(),
                 )
                 ControlTab.COMMANDS -> CommandsTab(
@@ -517,90 +514,48 @@ private fun KeepAliveControlTabs(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ModeCapsuleBar(
+private fun ControlTabRow(
     selected: ControlTab,
     onSelect: (ControlTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val trackColor = OraculoColors.SurfaceRecessed
-    val pillColor = if (OraculoColors.IsDark) OraculoColors.SecondaryContainer else OraculoColors.Surface
-    val pillBorderColor = OraculoColors.Outline
-    val tabHeight = 46.dp
-
-    BoxWithConstraints(
-        modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(trackColor)
-            .border(1.dp, OraculoColors.Outline, RoundedCornerShape(14.dp))
-            .padding(4.dp),
+    PrimaryTabRow(
+        selectedTabIndex = selected.ordinal,
+        containerColor = OraculoColors.Background,
+        contentColor = OraculoColors.Primary,
+        divider = { HorizontalDivider(thickness = 1.dp, color = OraculoColors.Outline) },
+        modifier = modifier,
     ) {
-        val tabCount = ControlTab.entries.size
-        val tabWidth = maxWidth / tabCount
-        val indicatorOffset by animateDpAsState(
-            targetValue = tabWidth * selected.ordinal,
-            animationSpec = OraculoMotion.TabIndicatorSpring,
-            label = "modePillOffset",
-        )
-
-        Box(
-            modifier = Modifier
-                .offset(x = indicatorOffset)
-                .width(tabWidth)
-                .height(tabHeight)
-                .clip(RoundedCornerShape(OraculoMetrics.CornerSmall))
-                .background(pillColor)
-                .border(1.dp, pillBorderColor, RoundedCornerShape(OraculoMetrics.CornerSmall)),
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            ControlTab.entries.forEach { tab ->
-                val isSelected = tab == selected
-                val iconTint by animateColorAsState(
-                    targetValue = if (isSelected) OraculoColors.Primary else OraculoColors.OnSurfaceMuted,
-                    animationSpec = OraculoMotion.microTween(),
-                    label = "tabIconTint",
-                )
-                val labelTint by animateColorAsState(
-                    targetValue = if (isSelected) OraculoColors.OnSurface else OraculoColors.OnSurfaceMuted,
-                    animationSpec = OraculoMotion.microTween(),
-                    label = "tabLabelTint",
-                )
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(tabHeight)
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) { onSelect(tab) },
-                    contentAlignment = Alignment.Center,
+        ControlTab.entries.forEach { tab ->
+            val isSelected = tab == selected
+            Tab(
+                selected = isSelected,
+                onClick = { onSelect(tab) },
+                selectedContentColor = OraculoColors.Primary,
+                unselectedContentColor = OraculoColors.OnSurfaceMuted,
+                modifier = Modifier.height(54.dp),
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 4.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        Icon(
-                            imageVector = tab.icon,
-                            contentDescription = tab.label,
-                            tint = iconTint,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Text(
-                            text = tab.label,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                            color = labelTint,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
+                    Icon(
+                        imageVector = tab.icon,
+                        contentDescription = tab.label,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = tab.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontSize = 11.sp,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }
@@ -924,93 +879,83 @@ private fun TouchpadSettingsDrawer(
         enter = OraculoMotion.ExpandV,
         exit = OraculoMotion.CollapseV,
     ) {
-        val chipShape = RoundedCornerShape(OraculoMetrics.CornerSmall)
+        val speeds = remember { listOf(1.0f to "1.0x", 1.5f to "1.5x", 2.2f to "2.2x", 3.0f to "3.0x") }
         Surface(
             color = OraculoColors.Surface,
             shape = RoundedCornerShape(OraculoMetrics.CornerLarge),
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, OraculoColors.Outline, RoundedCornerShape(OraculoMetrics.CornerLarge)),
+            border = BorderStroke(1.dp, OraculoColors.Outline),
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    text = "Cursor:",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = OraculoColors.OnSurfaceMuted,
-                )
-                listOf(1.0f to "1.0x", 1.5f to "1.5x", 2.2f to "2.2x", 3.0f to "3.0x").forEach { (speed, label) ->
-                    val selected = abs(pointerSpeed - speed) < 0.05f
-                    val (speedSource, speedPressed) = rememberPressedInteraction()
-                    Surface(
-                        color = if (selected) OraculoColors.Primary else OraculoColors.SurfaceRecessed,
-                        shape = chipShape,
-                        modifier = Modifier
-                            .height(OraculoMetrics.ControlHeightCompactChip)
-                            .oraculoPressScale(speedPressed)
-                            .clip(chipShape)
-                            .border(
-                                1.dp,
-                                if (selected) OraculoColors.Primary else OraculoColors.Outline,
-                                chipShape,
-                            )
-                            .clickable(
-                                interactionSource = speedSource,
-                                indication = LocalIndication.current,
-                            ) { onSelectSpeed(speed) },
-                    ) {
-                        Box(
-                            modifier = Modifier.padding(horizontal = 10.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = tr("Velocidade do cursor", "Pointer speed"),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = OraculoColors.OnSurfaceMuted,
+                    )
+                    FilterChip(
+                        selected = naturalScroll,
+                        onClick = onToggleNaturalScroll,
+                        leadingIcon = if (naturalScroll) {
+                            {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(FilterChipDefaults.IconSize),
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        label = {
                             Text(
-                                text = label,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = if (selected) OraculoColors.OnPrimary else OraculoColors.OnSurface,
+                                text = tr("Scroll natural", "Natural scroll"),
+                                style = MaterialTheme.typography.labelMedium,
                             )
-                        }
-                    }
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = OraculoColors.SurfaceRecessed,
+                            labelColor = OraculoColors.OnSurfaceMuted,
+                            selectedContainerColor = OraculoColors.SecondaryContainer,
+                            selectedLabelColor = OraculoColors.OnSecondaryContainer,
+                            selectedLeadingIconColor = OraculoColors.OnSecondaryContainer,
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = naturalScroll,
+                            borderColor = OraculoColors.Outline,
+                            selectedBorderColor = OraculoColors.SecondaryContainer,
+                        ),
+                        modifier = Modifier.height(OraculoMetrics.ControlHeightCompactChip),
+                    )
                 }
 
-                Spacer(modifier = Modifier.width(4.dp))
-
-                val (scrollSource, scrollPressed) = rememberPressedInteraction()
-                Surface(
-                    color = if (naturalScroll) OraculoColors.SecondaryContainer else OraculoColors.SurfaceRecessed,
-                    shape = chipShape,
-                    modifier = Modifier
-                        .height(OraculoMetrics.ControlHeightCompactChip)
-                        .oraculoPressScale(scrollPressed)
-                        .clip(chipShape)
-                        .border(
-                            1.dp,
-                            if (naturalScroll) OraculoColors.Primary else OraculoColors.Outline,
-                            chipShape,
-                        )
-                        .clickable(
-                            interactionSource = scrollSource,
-                            indication = LocalIndication.current,
-                        ) { onToggleNaturalScroll() },
-                ) {
-                    Box(
-                        modifier = Modifier.padding(horizontal = 10.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = if (naturalScroll) {
-                                tr("Scroll natural: ON", "Natural scroll: ON")
-                            } else {
-                                tr("Scroll natural: OFF", "Natural scroll: OFF")
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    speeds.forEachIndexed { index, (speed, label) ->
+                        val selected = abs(pointerSpeed - speed) < 0.05f
+                        SegmentedButton(
+                            selected = selected,
+                            onClick = { onSelectSpeed(speed) },
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = speeds.size),
+                            colors = oraculoSegmentedButtonColors(),
+                            icon = {},
+                            label = {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                )
                             },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (naturalScroll) OraculoColors.Primary else OraculoColors.OnSurfaceMuted,
                         )
                     }
                 }
@@ -1339,13 +1284,8 @@ private fun TouchpadTelemetryPill(
         modifier = modifier,
     ) {
         Surface(
-            color = OraculoColors.SurfaceRecessed,
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.border(
-                1.dp,
-                OraculoColors.Outline,
-                RoundedCornerShape(10.dp),
-            ),
+            color = OraculoColors.SurfaceRecessed.copy(alpha = 0.88f),
+            shape = RoundedCornerShape(OraculoMetrics.CornerSmall),
         ) {
             Text(
                 text = label.orEmpty(),
@@ -1517,16 +1457,13 @@ private fun CornerReticles(
         if (touchSpot != null && touchGlowAlpha > 0.01f) {
             val radius = 84.dp.toPx()
             drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        glowColor.copy(alpha = 0.18f * touchGlowAlpha),
-                        glowColor.copy(alpha = 0.06f * touchGlowAlpha),
-                        Color.Transparent,
-                    ),
-                    center = touchSpot,
-                    radius = radius,
-                ),
+                color = glowColor.copy(alpha = 0.06f * touchGlowAlpha),
                 radius = radius,
+                center = touchSpot,
+            )
+            drawCircle(
+                color = glowColor.copy(alpha = 0.12f * touchGlowAlpha),
+                radius = radius * 0.56f,
                 center = touchSpot,
             )
         }
@@ -1567,6 +1504,7 @@ private val TERMINAL_QUICK_KEYS = listOf(
 private fun TerminalTab(
     client: OraculoMobileClient,
     host: SavedHostInfo,
+    isActive: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -1861,6 +1799,7 @@ private fun TerminalTab(
                 terminalStyle = terminalStyle,
                 ptyxis = ptyxis,
                 isConnecting = isConnecting,
+                isActive = isActive,
                 onGridMeasured = { cols, rows ->
                     termCols = cols
                     termRows = rows
@@ -1975,10 +1914,7 @@ private fun TerminalTab(
             Button(
                 onClick = { sendEnterAndClear() },
                 enabled = session != null,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = OraculoColors.Primary,
-                    contentColor = OraculoColors.OnPrimary,
-                ),
+                colors = oraculoPrimaryButtonColors(),
                 shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 modifier = Modifier
@@ -2032,10 +1968,7 @@ private fun PtyxisTerminalHeader(
             style = MaterialTheme.typography.labelSmall,
             fontFamily = FontFamily.Monospace,
             color = ptyxis.ForegroundMuted,
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .background(ptyxis.Background.copy(alpha = 0.6f))
-                .padding(horizontal = 6.dp, vertical = 2.dp),
+            modifier = Modifier.padding(horizontal = 4.dp),
         )
         IconButton(
             onClick = onDecreaseFont,
@@ -2106,6 +2039,7 @@ private fun PtyxisViewport(
     terminalStyle: TextStyle,
     ptyxis: PtyxisPalette,
     isConnecting: Boolean,
+    isActive: Boolean,
     onGridMeasured: (cols: Int, rows: Int) -> Unit,
     onTapViewport: () -> Unit,
     modifier: Modifier = Modifier,
@@ -2119,10 +2053,11 @@ private fun PtyxisViewport(
         charWidth to lineHeight
     }
 
+    val cursorEnabled = (screenSnapshot?.cursorVisible == true) && !isConnecting
     var cursorBlinkOn by remember { mutableStateOf(true) }
-    LaunchedEffect(screenSnapshot?.cursorVisible, isConnecting, screenRevision) {
+    LaunchedEffect(cursorEnabled, isActive, screenRevision) {
         cursorBlinkOn = true
-        if (screenSnapshot?.cursorVisible == true && !isConnecting) {
+        if (cursorEnabled && isActive) {
             while (true) {
                 delay(530L)
                 cursorBlinkOn = !cursorBlinkOn
@@ -2130,14 +2065,26 @@ private fun PtyxisViewport(
         }
     }
 
-    val showCursor = (screenSnapshot?.cursorVisible == true) && !isConnecting && cursorBlinkOn
-    val renderedScreen = remember(screenSnapshot, fallbackMessage, ptyxis, showCursor) {
+    val renderedBase = remember(screenSnapshot, fallbackMessage, ptyxis, cursorEnabled) {
         val snap = screenSnapshot
         if (snap != null) {
-            buildPtyxisAnnotatedScreen(snap, ptyxis, showCursor)
+            buildPtyxisAnnotatedScreen(snap, ptyxis, showCursor = false)
         } else {
             AnnotatedString(fallbackMessage.trimEnd('\n', '\r', ' ').ifEmpty { " " })
         }
+    }
+    val renderedWithCursor = remember(screenSnapshot, ptyxis, cursorEnabled) {
+        val snap = screenSnapshot
+        if (snap != null && cursorEnabled) {
+            buildPtyxisAnnotatedScreen(snap, ptyxis, showCursor = true)
+        } else {
+            null
+        }
+    }
+    val renderedScreen = if (cursorEnabled && cursorBlinkOn && renderedWithCursor != null) {
+        renderedWithCursor
+    } else {
+        renderedBase
     }
 
     val verticalScroll = rememberScrollState()
@@ -2202,19 +2149,12 @@ private fun TerminalQuickKeysBar(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         TERMINAL_QUICK_KEYS.forEach { keySpec ->
-            val (interactionSource, pressed) = rememberPressedInteraction()
             Surface(
+                onClick = { onKey(keySpec) },
                 color = OraculoColors.Surface,
                 shape = shape,
-                modifier = Modifier
-                    .height(OraculoMetrics.ControlHeightSmall)
-                    .oraculoPressScale(pressed)
-                    .clip(shape)
-                    .border(1.dp, OraculoColors.Outline, shape)
-                    .clickable(
-                        interactionSource = interactionSource,
-                        indication = LocalIndication.current,
-                    ) { onKey(keySpec) },
+                border = BorderStroke(1.dp, OraculoColors.Outline),
+                modifier = Modifier.height(OraculoMetrics.ControlHeightSmall),
             ) {
                 if (keySpec.icon != null) {
                     Box(
@@ -2594,54 +2534,37 @@ private fun CommandsTab(
                 color = OraculoColors.OnSurface,
                 modifier = Modifier.weight(1f),
             )
-            val (newCmdSource, newCmdPressed) = rememberPressedInteraction()
-            val cmdBtnShape = RoundedCornerShape(OraculoMetrics.CornerSmall)
-            Surface(
-                color = OraculoColors.Surface,
-                shape = cmdBtnShape,
-                modifier = Modifier
-                    .height(OraculoMetrics.ControlHeightSmall)
-                    .oraculoPressScale(newCmdPressed)
-                    .clip(cmdBtnShape)
-                    .border(
-                        width = 1.dp,
-                        color = OraculoColors.Outline,
-                        shape = cmdBtnShape,
-                    )
-                    .clickable(
-                        interactionSource = newCmdSource,
-                        indication = LocalIndication.current,
-                    ) { openCreateEditor() },
+            FilledTonalButton(
+                onClick = { openCreateEditor() },
+                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = OraculoColors.SecondaryContainer,
+                    contentColor = OraculoColors.OnSecondaryContainer,
+                ),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(OraculoMetrics.ControlHeightSmall),
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = null,
-                        tint = OraculoColors.Primary,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                        text = tr("Novo", "New"),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontSize = 13.sp,
-                        color = OraculoColors.OnSurface,
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = tr("Novo", "New"),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontSize = 13.sp,
+                )
             }
-            OraculoSquareIconButton(
+            IconButton(
                 onClick = { loadCommands() },
-                containerColor = OraculoColors.Surface,
-                size = OraculoMetrics.ControlHeightSmall,
+                modifier = Modifier.size(38.dp),
             ) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
                     contentDescription = "Atualizar lista",
                     tint = OraculoColors.OnSurfaceMuted,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(20.dp),
                 )
             }
         }
@@ -2822,16 +2745,13 @@ private fun CommandEditorDialog(
             Button(
                 onClick = onSubmit,
                 enabled = !isSaving,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = OraculoColors.Primary,
-                    contentColor = OraculoColors.OnPrimary,
-                ),
+                colors = oraculoPrimaryButtonColors(),
                 shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                 modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
             ) {
                 if (isSaving) {
                     CircularProgressIndicator(
-                        color = OraculoColors.OnPrimary,
+                        color = OraculoColors.OnPrimaryAction,
                         modifier = Modifier.size(16.dp),
                         strokeWidth = 2.dp,
                     )
@@ -2914,52 +2834,53 @@ private fun CommandCardRow(
         Spacer(modifier = Modifier.width(6.dp))
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            OraculoSquareIconButton(
+            IconButton(
                 onClick = onEdit,
                 enabled = !isDeleting,
-                size = OraculoMetrics.ControlHeightSmall,
+                modifier = Modifier.size(36.dp),
             ) {
                 Icon(
                     imageVector = Icons.Default.Edit,
                     contentDescription = "Editar ${item.label}",
                     tint = OraculoColors.OnSurfaceMuted,
-                    modifier = Modifier.size(17.dp),
+                    modifier = Modifier.size(18.dp),
                 )
             }
-            OraculoSquareIconButton(
+            IconButton(
                 onClick = onDelete,
                 enabled = !isDeleting && canRun,
-                size = OraculoMetrics.ControlHeightSmall,
+                modifier = Modifier.size(36.dp),
             ) {
                 Icon(
                     imageVector = Icons.Default.DeleteOutline,
                     contentDescription = "Remover ${item.label}",
                     tint = OraculoColors.OnSurfaceMuted,
-                    modifier = Modifier.size(17.dp),
+                    modifier = Modifier.size(18.dp),
                 )
             }
             Spacer(modifier = Modifier.width(2.dp))
-            Box(
-                modifier = Modifier
-                    .size(OraculoMetrics.ControlHeightSmall)
-                    .clip(RoundedCornerShape(OraculoMetrics.CornerSmall))
-                    .background(OraculoColors.SecondaryContainer),
-                contentAlignment = Alignment.Center,
+            FilledTonalIconButton(
+                onClick = onExecute,
+                enabled = canRun && !isDeleting && !isRunning,
+                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                    containerColor = OraculoColors.SecondaryContainer,
+                    contentColor = OraculoColors.OnSecondaryContainer,
+                ),
+                modifier = Modifier.size(36.dp),
             ) {
                 if (isRunning || isDeleting) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
-                        color = OraculoColors.Primary,
+                        color = OraculoColors.OnSecondaryContainer,
                         strokeWidth = 2.dp,
                     )
                 } else {
                     Icon(
                         imageVector = Icons.Default.PlayArrow,
                         contentDescription = "Executar ${item.label}",
-                        tint = OraculoColors.Primary,
-                        modifier = Modifier.size(19.dp),
+                        modifier = Modifier.size(20.dp),
                     )
                 }
             }

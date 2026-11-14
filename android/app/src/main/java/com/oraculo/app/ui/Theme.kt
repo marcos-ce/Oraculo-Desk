@@ -5,10 +5,7 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.TweenSpec
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
@@ -18,22 +15,23 @@ import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.LocalIndication
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonColors
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButtonColors
+import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -42,14 +40,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -62,8 +56,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Tokens compartilhados de dimensões e cantos para manter botões e superfícies
- * proporcionais em todas as telas e orientações.
+ * Tokens compartilhados de dimensões e cantos Material 3 para manter botões
+ * e superfícies proporcionais e leves em todas as telas e orientações.
  */
 object OraculoMetrics {
     val ControlHeightCompactChip: Dp = 32.dp
@@ -71,20 +65,22 @@ object OraculoMetrics {
     val ControlHeightCompactDeck: Dp = 42.dp
     val ControlHeightDialog: Dp = 44.dp
     val ControlHeightInputCompact: Dp = 48.dp
-    val ControlHeightDeck: Dp = 50.dp
-    val ControlHeightCta: Dp = 52.dp
+    val ControlHeightDeck: Dp = 48.dp
+    val ControlHeightCta: Dp = 50.dp
     val ControlHeightInput: Dp = 56.dp
 
-    val CornerSmall: Dp = 10.dp
+    val CornerSmall: Dp = 8.dp
     val CornerMedium: Dp = 12.dp
-    val CornerLarge: Dp = 14.dp
-    val CornerCard: Dp = 18.dp
+    val CornerLarge: Dp = 16.dp
     val CornerSurface: Dp = 20.dp
+    val CornerSurfaceExpanded: Dp = 24.dp
+    val CornerGroupedOuter: Dp = 20.dp
+    val CornerGroupedInner: Dp = 8.dp
 }
 
 /**
- * Curvas e durações padronizadas para deixar feedback, transições e painéis
- * ágeis e consistentes em todo o aplicativo.
+ * Curvas e tempos padronizados do Material 3 para transições leves e estáveis,
+ * sem física custosa por widget em aparelhos mais modestos.
  */
 object OraculoMotion {
     val Easing: Easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
@@ -105,11 +101,6 @@ object OraculoMotion {
         easing = Easing,
     )
 
-    val TabIndicatorSpring = spring<Dp>(
-        dampingRatio = 0.88f,
-        stiffness = 700f,
-    )
-
     val ExpandV: EnterTransition =
         expandVertically(tween<IntSize>(PanelEnterMs, easing = Easing)) +
             fadeIn(tween<Float>(StateDurationMs, easing = Easing))
@@ -127,7 +118,7 @@ object OraculoMotion {
             fadeOut(tween<Float>(100, easing = Easing))
 
     val OverlayEnter: EnterTransition =
-        slideInVertically(tween<IntOffset>(RouteEnterMs, easing = Easing)) { it / 16 } +
+        slideInVertically(tween<IntOffset>(RouteEnterMs, easing = Easing)) { it / 18 } +
             fadeIn(tween<Float>(PanelEnterMs, easing = Easing))
 
     val OverlayExit: ExitTransition =
@@ -135,77 +126,23 @@ object OraculoMotion {
             fadeOut(tween<Float>(PanelExitMs, easing = Easing))
 }
 
-@Composable
-fun rememberPressedInteraction(): Pair<MutableInteractionSource, Boolean> {
-    val source = remember { MutableInteractionSource() }
-    val pressed by source.collectIsPressedAsState()
-    return source to pressed
-}
-
-@Composable
-fun Modifier.oraculoPressScale(
-    pressed: Boolean,
-    targetScale: Float = 0.965f,
-): Modifier {
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) targetScale else 1f,
-        animationSpec = OraculoMotion.microTween(),
-        label = "oraculoPressScale",
+/**
+ * Forma segmentada de grupo de cartões Material 3 (cantos externos maiores e internos suaves).
+ */
+fun oraculoSegmentedItemShape(
+    index: Int,
+    count: Int,
+    outerRadius: Dp = OraculoMetrics.CornerGroupedOuter,
+    innerRadius: Dp = OraculoMetrics.CornerGroupedInner,
+): RoundedCornerShape {
+    val top = if (index == 0) outerRadius else innerRadius
+    val bottom = if (index >= count - 1) outerRadius else innerRadius
+    return RoundedCornerShape(
+        topStart = top,
+        topEnd = top,
+        bottomStart = bottom,
+        bottomEnd = bottom,
     )
-    return graphicsLayer {
-        scaleX = scale
-        scaleY = scale
-    }
-}
-
-@Composable
-fun OraculoSquareIconButton(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    active: Boolean = false,
-    size: Dp = OraculoMetrics.ControlHeightSmall,
-    containerColor: Color = Color.Transparent,
-    borderColor: Color? = null,
-    content: @Composable () -> Unit,
-) {
-    val (interactionSource, pressed) = rememberPressedInteraction()
-    val shape = RoundedCornerShape(OraculoMetrics.CornerSmall)
-    val resolvedBg by animateColorAsState(
-        targetValue = if (active) OraculoColors.SecondaryContainer else containerColor,
-        animationSpec = OraculoMotion.stateTween(),
-        label = "squareIconBg",
-    )
-    val resolvedBorderColor = when {
-        borderColor != null -> borderColor
-        active -> OraculoColors.Primary.copy(alpha = 0.55f)
-        containerColor != Color.Transparent -> OraculoColors.Outline
-        else -> null
-    }
-
-    Box(
-        modifier = modifier
-            .size(size)
-            .oraculoPressScale(pressed && enabled)
-            .clip(shape)
-            .background(resolvedBg)
-            .then(
-                if (resolvedBorderColor != null) {
-                    Modifier.border(1.dp, resolvedBorderColor, shape)
-                } else {
-                    Modifier
-                }
-            )
-            .clickable(
-                interactionSource = interactionSource,
-                indication = LocalIndication.current,
-                enabled = enabled,
-                onClick = onClick,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        content()
-    }
 }
 
 enum class ThemeMode(val prefValue: String, private val ptLabel: String, private val enLabel: String) {
@@ -215,12 +152,6 @@ enum class ThemeMode(val prefValue: String, private val ptLabel: String, private
 
     val label: String
         get() = com.oraculo.app.tr(ptLabel, enLabel)
-
-    fun next(): ThemeMode = when (this) {
-        SYSTEM -> LIGHT
-        LIGHT -> DARK
-        DARK -> SYSTEM
-    }
 
     companion object {
         fun fromPref(value: String?): ThemeMode =
@@ -308,6 +239,9 @@ data class OraculoPalette(
     val SurfaceInteractive: Color,
     val Primary: Color,
     val OnPrimary: Color,
+    val PrimaryAction: Color,
+    val OnPrimaryAction: Color,
+    val PrimaryActionBorder: Color,
     val SecondaryContainer: Color,
     val OnSecondaryContainer: Color,
     val OnSurface: Color,
@@ -327,10 +261,13 @@ private val OraculoDarkPalette = OraculoPalette(
     Surface = Color(0xFF151921),
     SurfaceRecessed = Color(0xFF090B0E),
     SurfaceInteractive = Color(0xFF1C212C),
-    Primary = Color(0xFF5B8DEF),
+    Primary = Color(0xFF6D93D6),
     OnPrimary = Color(0xFFFFFFFF),
+    PrimaryAction = Color(0xFF29467A),
+    OnPrimaryAction = Color(0xFFF0F3F8),
+    PrimaryActionBorder = Color(0xFF3E619E),
     SecondaryContainer = Color(0xFF1E283B),
-    OnSecondaryContainer = Color(0xFFD9E5FF),
+    OnSecondaryContainer = Color(0xFFDCE5F5),
     OnSurface = Color(0xFFF0F3F8),
     OnSurfaceMuted = Color(0xFF8C96A8),
     Outline = Color(0xFF232936),
@@ -350,6 +287,9 @@ private val OraculoLightPalette = OraculoPalette(
     SurfaceInteractive = Color(0xFFF0F3F7),
     Primary = Color(0xFF2563EB),
     OnPrimary = Color(0xFFFFFFFF),
+    PrimaryAction = Color(0xFF2563EB),
+    OnPrimaryAction = Color(0xFFFFFFFF),
+    PrimaryActionBorder = Color(0xFF2563EB),
     SecondaryContainer = Color(0xFFE2EBFE),
     OnSecondaryContainer = Color(0xFF173D91),
     OnSurface = Color(0xFF111418),
@@ -380,22 +320,22 @@ fun isOraculoDarkTheme(themeMode: ThemeMode): Boolean = when (themeMode) {
 private val OraculoTypography = Typography(
     displaySmall = TextStyle(
         fontFamily = FontFamily.SansSerif,
-        fontSize = 30.sp,
-        fontWeight = FontWeight.SemiBold,
-        letterSpacing = (-0.8).sp,
-        lineHeight = 36.sp,
+        fontSize = 32.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = (-1.0).sp,
+        lineHeight = 38.sp,
     ),
     titleLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
-        fontSize = 20.sp,
+        fontSize = 21.sp,
         fontWeight = FontWeight.SemiBold,
         letterSpacing = (-0.4).sp,
     ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontSize = 16.sp,
-        fontWeight = FontWeight.Medium,
-        letterSpacing = (-0.1).sp,
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = (-0.15).sp,
     ),
     bodyMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -411,6 +351,7 @@ private val OraculoTypography = Typography(
         fontFamily = FontFamily.SansSerif,
         fontSize = 14.sp,
         fontWeight = FontWeight.SemiBold,
+        letterSpacing = 0.1.sp,
     ),
     bodyLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -436,6 +377,9 @@ fun OraculoTheme(
         SurfaceInteractive = animateColorAsState(target.SurfaceInteractive, animSpec, label = "interactive").value,
         Primary = animateColorAsState(target.Primary, animSpec, label = "primary").value,
         OnPrimary = animateColorAsState(target.OnPrimary, animSpec, label = "onPrimary").value,
+        PrimaryAction = animateColorAsState(target.PrimaryAction, animSpec, label = "primaryAction").value,
+        OnPrimaryAction = animateColorAsState(target.OnPrimaryAction, animSpec, label = "onPrimaryAction").value,
+        PrimaryActionBorder = animateColorAsState(target.PrimaryActionBorder, animSpec, label = "primaryActionBorder").value,
         SecondaryContainer = animateColorAsState(target.SecondaryContainer, animSpec, label = "secContainer").value,
         OnSecondaryContainer = animateColorAsState(target.OnSecondaryContainer, animSpec, label = "onSecContainer").value,
         OnSurface = animateColorAsState(target.OnSurface, animSpec, label = "onSurface").value,
@@ -465,7 +409,13 @@ fun OraculoTheme(
             onSurface = palette.OnSurface,
             surfaceVariant = palette.SecondaryContainer,
             onSurfaceVariant = palette.OnSurfaceMuted,
+            surfaceContainerLowest = palette.SurfaceRecessed,
+            surfaceContainerLow = palette.SurfaceRecessed,
+            surfaceContainer = palette.Surface,
+            surfaceContainerHigh = palette.SurfaceInteractive,
+            surfaceContainerHighest = palette.SurfaceInteractive,
             outline = palette.Outline,
+            outlineVariant = palette.Outline,
             error = palette.Error,
             onError = palette.OnError,
         )
@@ -485,7 +435,13 @@ fun OraculoTheme(
             onSurface = palette.OnSurface,
             surfaceVariant = palette.SecondaryContainer,
             onSurfaceVariant = palette.OnSurfaceMuted,
+            surfaceContainerLowest = palette.SurfaceRecessed,
+            surfaceContainerLow = palette.SurfaceRecessed,
+            surfaceContainer = palette.Surface,
+            surfaceContainerHigh = palette.SurfaceInteractive,
+            surfaceContainerHighest = palette.SurfaceInteractive,
             outline = palette.Outline,
+            outlineVariant = palette.Outline,
             error = palette.Error,
             onError = palette.OnError,
         )
@@ -501,8 +457,33 @@ fun OraculoTheme(
 }
 
 /**
- * Botão de ação padronizado do deck inferior e barra de atalhos principais,
- * com altura fixa, resposta tátil rápida e transição uniforme de estado.
+ * Cores padronizadas do Material 3 para os botões principais preenchidos do app,
+ * mantendo azul-cobalto no tema escuro e azul Google no tema claro.
+ */
+@Composable
+fun oraculoPrimaryButtonColors(): ButtonColors = ButtonDefaults.buttonColors(
+    containerColor = OraculoColors.PrimaryAction,
+    contentColor = OraculoColors.OnPrimaryAction,
+    disabledContainerColor = OraculoColors.SurfaceInteractive,
+    disabledContentColor = OraculoColors.OnSurfaceMuted.copy(alpha = 0.65f),
+)
+
+/**
+ * Cores padronizadas para `SingleChoiceSegmentedButtonRow` no padrão Material 3.
+ */
+@Composable
+fun oraculoSegmentedButtonColors(): SegmentedButtonColors = SegmentedButtonDefaults.colors(
+    activeContainerColor = OraculoColors.SecondaryContainer,
+    activeContentColor = OraculoColors.OnSecondaryContainer,
+    activeBorderColor = OraculoColors.Outline,
+    inactiveContainerColor = Color.Transparent,
+    inactiveContentColor = OraculoColors.OnSurfaceMuted,
+    inactiveBorderColor = OraculoColors.Outline,
+)
+
+/**
+ * Botão de ação padronizado do deck inferior utilizando componentes nativos
+ * `Button` / `FilledTonalButton` do Material 3 sem animações ou bordas extras.
  */
 @Composable
 fun OraculoDeckButton(
@@ -516,83 +497,55 @@ fun OraculoDeckButton(
     height: Dp = OraculoMetrics.ControlHeightDeck,
     cornerRadius: Dp = OraculoMetrics.CornerLarge,
 ) {
-    val (interactionSource, pressed) = rememberPressedInteraction()
     val shape = RoundedCornerShape(cornerRadius)
-    val bg by animateColorAsState(
-        targetValue = when {
-            !enabled -> OraculoColors.Surface.copy(alpha = 0.55f)
-            active -> OraculoColors.Primary
-            accent -> OraculoColors.SecondaryContainer
-            else -> OraculoColors.Surface
-        },
-        animationSpec = OraculoMotion.stateTween(),
-        label = "deckBtnBg",
-    )
-    val border by animateColorAsState(
-        targetValue = when {
-            !enabled -> OraculoColors.Outline.copy(alpha = 0.5f)
-            active -> OraculoColors.Primary
-            accent -> OraculoColors.Primary.copy(alpha = 0.5f)
-            else -> OraculoColors.Primary.copy(alpha = 0.36f)
-        },
-        animationSpec = OraculoMotion.stateTween(),
-        label = "deckBtnBorder",
-    )
-    val textColor by animateColorAsState(
-        targetValue = when {
-            !enabled -> OraculoColors.OnSurfaceMuted
-            active -> OraculoColors.OnPrimary
-            accent -> OraculoColors.OnSecondaryContainer
-            else -> OraculoColors.OnSurface
-        },
-        animationSpec = OraculoMotion.stateTween(),
-        label = "deckBtnText",
-    )
-    val iconColor by animateColorAsState(
-        targetValue = when {
-            !enabled -> OraculoColors.OnSurfaceMuted
-            active -> OraculoColors.OnPrimary
-            else -> OraculoColors.Primary
-        },
-        animationSpec = OraculoMotion.stateTween(),
-        label = "deckBtnIcon",
-    )
-
-    Box(
-        modifier = modifier
-            .height(height)
-            .oraculoPressScale(pressed && enabled)
-            .clip(shape)
-            .background(bg)
-            .border(1.dp, border, shape)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = LocalIndication.current,
-                enabled = enabled,
-                onClick = onClick,
-            )
-            .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) {
+    val contentRow: @Composable () -> Unit = {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.Center,
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = iconColor,
                 modifier = Modifier.size(19.dp),
             )
+            Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
-                color = textColor,
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+    }
+
+    if (active) {
+        Button(
+            onClick = onClick,
+            enabled = enabled,
+            shape = shape,
+            colors = oraculoPrimaryButtonColors(),
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            modifier = modifier.height(height),
+        ) {
+            contentRow()
+        }
+    } else {
+        FilledTonalButton(
+            onClick = onClick,
+            enabled = enabled,
+            shape = shape,
+            colors = ButtonDefaults.filledTonalButtonColors(
+                containerColor = if (accent) OraculoColors.SecondaryContainer else OraculoColors.Surface,
+                contentColor = if (accent) OraculoColors.OnSecondaryContainer else OraculoColors.OnSurface,
+                disabledContainerColor = OraculoColors.Surface.copy(alpha = 0.55f),
+                disabledContentColor = OraculoColors.OnSurfaceMuted,
+            ),
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            modifier = modifier.height(height),
+        ) {
+            contentRow()
         }
     }
 }
