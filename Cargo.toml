@@ -13,7 +13,6 @@ edition = "2024"
 license = "Apache-2.0"
 description = "P2P remote desktop, PTY terminal, host telemetry, and sandboxed file manager over QUIC (iroh) for Linux (Wayland/X11), Windows, and Android."
 repository = "https://github.com/marcos-ce/Oraculo-Desk"
-homepage = "https://github.com/marcos-ce/Oraculo-Desk"
 keywords = ["remote-desktop", "wayland", "pipewire", "quic", "iroh"]
 categories = ["network-programming", "multimedia::video", "command-line-utilities"]
 

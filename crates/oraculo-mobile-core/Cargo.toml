@@ -3,6 +3,10 @@ name = "oraculo-mobile-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [lib]
 name = "oraculo_mobile_core"
