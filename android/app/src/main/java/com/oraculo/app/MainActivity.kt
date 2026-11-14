@@ -354,8 +354,8 @@ private fun OraculoApp(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
                         text = tr(
-                            "Cole a URI exibida pelo comando oraculo-host pair:",
-                            "Paste the URI printed by oraculo-host pair:",
+                            "Cole a URI exibida pelo comando oraculo-host serve --pair:",
+                            "Paste the URI printed by oraculo-host serve --pair:",
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = OraculoColors.OnSurfaceMuted,
@@ -640,8 +640,8 @@ private fun DeviceListScreen(
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = tr(
-                                "Rode oraculo-host pair no computador e leia o QR Code.",
-                                "Run oraculo-host pair on your computer and scan the QR Code.",
+                                "Rode oraculo-host serve --pair no computador e leia o QR Code.",
+                                "Run oraculo-host serve --pair on your computer and scan the QR Code.",
                             ),
                             style = MaterialTheme.typography.bodyMedium,
                             color = OraculoColors.OnSurfaceMuted,

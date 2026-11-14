@@ -491,7 +491,7 @@ internal fun ScreenStreamingScreen(
         inputConnecting = true
         inputError = null
         if (inputAutoRetryCount == 0) {
-            inputConnectHint = "Conectando touchpad..."
+            inputConnectHint = tr("Conectando touchpad...", "Connecting touchpad...")
         }
         keyboardController.resetState(null)
 
@@ -502,7 +502,10 @@ internal fun ScreenStreamingScreen(
                     if (!active) return@post
                     if (createdInput != null && inputSession === createdInput) {
                         createdInput = null
-                        triggerInputReconnect(resetAttempts = false, hint = "Reconectando touchpad...")
+                        triggerInputReconnect(
+                            resetAttempts = false,
+                            hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."),
+                        )
                     }
                 }
             }
@@ -532,7 +535,10 @@ internal fun ScreenStreamingScreen(
                 }.onFailure { err ->
                     Log.w(TAG_STREAM, "openInput falhou", err)
                     if (inputAutoRetryCount in 1 until 3) {
-                        triggerInputReconnect(resetAttempts = false, hint = "Reconectando touchpad...")
+                        triggerInputReconnect(
+                            resetAttempts = false,
+                            hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."),
+                        )
                     } else {
                         inputConnecting = false
                         inputError = formatOraculoError(err)
@@ -1193,10 +1199,10 @@ internal fun ScreenStreamingScreen(
             errorMsg = inputError,
             pointerSpeed = pointerSpeed,
             naturalScroll = naturalScroll,
-            onRetry = { triggerInputReconnect(resetAttempts = true, hint = "Conectando touchpad...") },
+            onRetry = { triggerInputReconnect(resetAttempts = true, hint = tr("Conectando touchpad...", "Connecting touchpad...")) },
             onSessionBroken = { broken ->
                 if (inputSession === broken && !inputConnecting) {
-                    triggerInputReconnect(resetAttempts = false, hint = "Reconectando touchpad...")
+                    triggerInputReconnect(resetAttempts = false, hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."))
                 }
             },
             onDisarmModifiers = { keyboardController.disarmArmedModifiers() },

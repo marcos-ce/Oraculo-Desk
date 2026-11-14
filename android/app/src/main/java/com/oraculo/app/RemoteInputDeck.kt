@@ -457,7 +457,7 @@ internal fun RemoteShortcutStrip(
     compact: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    val shortcuts = remember {
+    val shortcuts = remember(AppI18n.lang) {
         listOf(
             ShortcutSpec("Super+D", modifiers = listOf(MobileRemoteKey.SUPER), text = "d"),
             ShortcutSpec("Alt+Tab", modifiers = listOf(MobileRemoteKey.ALT), key = MobileRemoteKey.TAB),
@@ -472,43 +472,43 @@ internal fun RemoteShortcutStrip(
             ShortcutSpec("F5", key = MobileRemoteKey.F5),
             ShortcutSpec("F11", key = MobileRemoteKey.F11),
             ShortcutSpec(
-                "Reproduzir ou pausar",
+                tr("Reproduzir ou pausar", "Play or pause"),
                 key = MobileRemoteKey.PLAY_PAUSE,
                 icon = Icons.Default.PlayArrow,
                 secondaryIcon = Icons.Default.Pause,
             ),
             ShortcutSpec(
-                "Diminuir volume",
+                tr("Diminuir volume", "Volume down"),
                 key = MobileRemoteKey.VOLUME_DOWN,
                 icon = Icons.AutoMirrored.Filled.VolumeDown,
             ),
             ShortcutSpec(
-                "Aumentar volume",
+                tr("Aumentar volume", "Volume up"),
                 key = MobileRemoteKey.VOLUME_UP,
                 icon = Icons.AutoMirrored.Filled.VolumeUp,
             ),
             ShortcutSpec(
-                "Silenciar",
+                tr("Silenciar", "Mute"),
                 key = MobileRemoteKey.VOLUME_MUTE,
                 icon = Icons.AutoMirrored.Filled.VolumeOff,
             ),
             ShortcutSpec(
-                "Seta esquerda",
+                tr("Seta esquerda", "Left arrow"),
                 key = MobileRemoteKey.LEFT,
                 icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
             ),
             ShortcutSpec(
-                "Seta cima",
+                tr("Seta cima", "Up arrow"),
                 key = MobileRemoteKey.UP,
                 icon = Icons.Default.KeyboardArrowUp,
             ),
             ShortcutSpec(
-                "Seta baixo",
+                tr("Seta baixo", "Down arrow"),
                 key = MobileRemoteKey.DOWN,
                 icon = Icons.Default.KeyboardArrowDown,
             ),
             ShortcutSpec(
-                "Seta direita",
+                tr("Seta direita", "Right arrow"),
                 key = MobileRemoteKey.RIGHT,
                 icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
             ),
