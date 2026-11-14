@@ -14,7 +14,7 @@
 ## Key Capabilities
 
 - **Zero-Config P2P Transport (`iroh`):** NAT hole-punching, encrypted QUIC streams, and `Ed25519` identity verification against a local allowlist (`trusted_peers.json`).
-- **Low-Latency Wayland Screen Streaming (Linux):** Captures monitors through `xdg-desktop-portal` (`ScreenCast`) + PipeWire and encodes H.264 Annex-B via GStreamer (`nvh264enc`, `vah264enc`, `vaapih264enc`, `openh264enc`, or `x264enc`) with `videoscale method=lanczos`, decoded in hardware (`MediaCodec`) on Android.
+- **Low-Latency Wayland Screen Streaming (Linux):** Captures monitors through `xdg-desktop-portal` (`ScreenCast`) + PipeWire and encodes H.264 Annex-B via GStreamer (`nvh264enc` with automatic CPU fallback to `openh264enc`) with `videoscale method=lanczos`, decoded in hardware (`MediaCodec`) on Android.
 - **Wayland Remote Input (Linux):** Pointer movement, clicks, scroll, X11 keysyms, Unicode fallback, and GNOME keyboard layout mapping via `xdg-desktop-portal` (`RemoteDesktop`).
 - **Interactive PTY Terminal:** Cross-platform shell sessions backed by `portable-pty` on the host and `vt100` emulation on Android.
 - **Quick Commands:** Execute pre-configured tasks from `commands.toml` (with a `30s` timeout and `256 KiB` per-stream output cap) or create/delete entries remotely when `commands_edit` is enabled.
@@ -33,7 +33,7 @@
 | **Mobile App (`Oráculo`)** | Android 8.0+ (API 26+, `arm64-v8a`) | Supported |
 | **Terminal CLI (`oraculo-cli`)** | Linux / macOS / Windows | Supported |
 
-> **Runtime requirement on Linux host:** Screen streaming launches `gst-launch-1.0` with `gdppay`, PipeWire GStreamer plugins, and an H.264 encoder (`nvh264enc`, `vah264enc`, `vaapih264enc`, `openh264enc`, or `x264enc`). Make sure `xdg-desktop-portal` and PipeWire are running in your Wayland session.
+> **Runtime requirement on Linux host:** Screen streaming launches `gst-launch-1.0` with `gdppay`, PipeWire GStreamer plugins, and an H.264 encoder (`nvh264enc` or `openh264enc`). Make sure `xdg-desktop-portal` and PipeWire are running in your Wayland session.
 
 ---
 

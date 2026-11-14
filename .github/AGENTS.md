@@ -34,7 +34,7 @@ Before finishing any code change, run `./scripts/build.sh test` and, whenever `c
 - `crates/oraculo-host`:
   - `src/main.rs`: CLI entry points: `serve [--pair]` (default), `peers`, `revoke <ENDPOINT_ID>`, `permissions [FLAGS]`, `info`, `monitors`.
   - `src/server.rs`: `iroh` QUIC endpoint listener, `host.lock` single-instance guard, stdin `'p'` pairing trigger, `TrustedPeersStore`, `ConnectionRegistry`, and stream dispatcher.
-  - `src/screen.rs`: Linux/Wayland screen capture via `xdg-desktop-portal` (`ScreenCast`, `ashpd`) + PipeWire + `gst-launch-1.0` subprocess (`nvh264enc`, `vah264enc`, `vaapih264enc`, `openh264enc`, `x264enc`), reading `/sys/class/drm/*/status` only to count active monitors. Non-Linux builds use a stub backend (`Windows DXGI backend planned`).
+  - `src/screen.rs`: Linux/Wayland screen capture via `xdg-desktop-portal` (`ScreenCast`, `ashpd`) + PipeWire + `gst-launch-1.0` subprocess (`nvh264enc` or `openh264enc`), reading `/sys/class/drm/*/status` only to count active monitors. Non-Linux builds use a stub backend (`Windows DXGI backend planned`).
   - `src/input.rs`: Linux/Wayland remote mouse and keyboard injection via `xdg-desktop-portal` (`RemoteDesktop`, `ashpd`) supporting X11 keysyms, Unicode hex fallback, and GNOME keyboard layout detection. Non-Linux builds use a stub backend.
   - `src/pty.rs`: interactive shell sessions via `portable-pty`.
   - `src/files.rs`: home-directory (`~`) sandboxed file listing, download, and atomic upload (`MAX_UPLOAD_BYTES = 2 GiB`).

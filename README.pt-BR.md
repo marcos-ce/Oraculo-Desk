@@ -14,7 +14,7 @@
 ## Principais Recursos
 
 - **Transporte P2P Zero-Config (`iroh`):** Travessia de NAT, streams QUIC criptografados e verificação criptográfica `Ed25519` contra a lista local de confiança (`trusted_peers.json`).
-- **Transmissão de Tela Wayland com Baixa Latência (Linux):** Captura via `xdg-desktop-portal` (`ScreenCast`) + PipeWire e codificação H.264 Annex-B via GStreamer (`nvh264enc`, `vah264enc`, `vaapih264enc`, `openh264enc` ou `x264enc`) com `videoscale method=lanczos`, decodificada em hardware (`MediaCodec`) no Android.
+- **Transmissão de Tela Wayland com Baixa Latência (Linux):** Captura via `xdg-desktop-portal` (`ScreenCast`) + PipeWire e codificação H.264 Annex-B via GStreamer (`nvh264enc` com fallback automático em CPU para `openh264enc`) com `videoscale method=lanczos`, decodificada em hardware (`MediaCodec`) no Android.
 - **Entrada Remota Wayland (Linux):** Movimento do ponteiro, cliques, rolagem, keysyms X11, fallback Unicode e detecção de layout de teclado do GNOME via `xdg-desktop-portal` (`RemoteDesktop`).
 - **Terminal PTY Interativo:** Sessões de shell multiplataforma com `portable-pty` no host e emulação `vt100` no aplicativo Android.
 - **Comandos Rápidos:** Executa tarefas pré-configuradas em `commands.toml` (timeout de `30s` e limite de `256 KiB` por stream) e permite criar/remover comandos remotamente quando `commands_edit` está habilitado.
@@ -33,7 +33,7 @@
 | **Aplicativo Mobile (`Oráculo`)** | Android 8.0+ (API 26+, `arm64-v8a`) | Suportado |
 | **CLI Cliente (`oraculo-cli`)** | Linux / macOS / Windows | Suportado |
 
-> **Requisito de execução no host Linux:** A transmissão de tela invoca `gst-launch-1.0` com `gdppay`, plugins PipeWire do GStreamer e um encoder H.264 (`nvh264enc`, `vah264enc`, `vaapih264enc`, `openh264enc` ou `x264enc`), além de `xdg-desktop-portal` e PipeWire ativos na sessão Wayland.
+> **Requisito de execução no host Linux:** A transmissão de tela invoca `gst-launch-1.0` com `gdppay`, plugins PipeWire do GStreamer e um encoder H.264 (`nvh264enc` ou `openh264enc`), além de `xdg-desktop-portal` e PipeWire ativos na sessão Wayland.
 
 ---
 
