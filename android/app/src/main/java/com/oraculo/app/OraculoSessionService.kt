@@ -108,7 +108,7 @@ class OraculoSessionService : Service() {
         ensureChannel()
         promoteForeground(
             buildNotification(
-                hostName = OraculoSessionCoordinator.activeHostName ?: "Computador",
+                hostName = OraculoSessionCoordinator.activeHostName ?: tr("Computador", "Computer"),
                 modeLabel = OraculoSessionCoordinator.activeModeLabel,
             )
         )
@@ -119,7 +119,7 @@ class OraculoSessionService : Service() {
         val hostName = intent?.getStringExtra(EXTRA_HOST_NAME)
             ?.takeIf { it.isNotBlank() }
             ?: OraculoSessionCoordinator.activeHostName
-            ?: "Computador"
+            ?: tr("Computador", "Computer")
         val modeLabel = intent?.getStringExtra(EXTRA_MODE_LABEL)
             ?.takeIf { it.isNotBlank() }
             ?: OraculoSessionCoordinator.activeModeLabel
@@ -167,10 +167,13 @@ class OraculoSessionService : Service() {
         if (manager.getNotificationChannel(CHANNEL_ID) != null) return
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Sessão ativa",
+            tr("Sessão ativa", "Active session"),
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Indica quando o Oráculo está conectado a um computador."
+            description = tr(
+                "Indica quando o Oráculo está conectado a um computador.",
+                "Indicates when Oráculo is connected to a computer.",
+            )
             setShowBadge(false)
             enableVibration(false)
             enableLights(false)
@@ -199,8 +202,8 @@ class OraculoSessionService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_oraculo)
-            .setContentTitle("Conectado a $hostName")
-            .setContentText("Sessão aberta · $modeLabel")
+            .setContentTitle(tr("Conectado a $hostName", "Connected to $hostName"))
+            .setContentText(tr("Sessão aberta · $modeLabel", "Active session · $modeLabel"))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -208,7 +211,7 @@ class OraculoSessionService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(openPendingIntent)
-            .addAction(0, "Encerrar sessão", disconnectPendingIntent)
+            .addAction(0, tr("Encerrar sessão", "Disconnect"), disconnectPendingIntent)
             .build()
     }
 

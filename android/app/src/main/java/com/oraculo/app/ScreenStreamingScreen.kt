@@ -172,7 +172,7 @@ internal fun ScreenStreamingScreen(
 
     var screenSession by remember { mutableStateOf<MobileScreenSession?>(null) }
     var screenConnecting by remember { mutableStateOf(true) }
-    var screenConnectHint by remember { mutableStateOf("Conectando vídeo...") }
+    var screenConnectHint by remember { mutableStateOf(tr("Conectando vídeo...", "Connecting video...")) }
     var screenError by remember { mutableStateOf<String?>(null) }
     var streamInfo by remember { mutableStateOf<ScreenStreamInfo?>(null) }
     var videoWidth by remember { mutableIntStateOf(0) }
@@ -185,7 +185,7 @@ internal fun ScreenStreamingScreen(
 
     var inputSession by remember { mutableStateOf<MobileInputSession?>(null) }
     var inputConnecting by remember { mutableStateOf(true) }
-    var inputConnectHint by remember { mutableStateOf("Conectando touchpad...") }
+    var inputConnectHint by remember { mutableStateOf(tr("Conectando touchpad...", "Connecting touchpad...")) }
     var inputError by remember { mutableStateOf<String?>(null) }
     var inputRetryNonce by remember { mutableIntStateOf(0) }
     var inputAutoRetryCount by remember(host.endpointId) { mutableIntStateOf(0) }
@@ -212,7 +212,7 @@ internal fun ScreenStreamingScreen(
         inputSession = inputSession,
         onSessionBroken = { broken ->
             if (inputSession === broken && !inputConnecting) {
-                triggerInputReconnectRef(false, "Reconectando touchpad...")
+                triggerInputReconnectRef(false, tr("Reconectando touchpad...", "Reconnecting touchpad..."))
             }
         },
         onPublishTelemetry = { publishTelemetry(it, 0L) },
@@ -226,7 +226,7 @@ internal fun ScreenStreamingScreen(
             if (inputAutoRetryCount >= 3) {
                 inputSession = null
                 inputConnecting = false
-                inputError = "Touchpad encerrado por inatividade."
+                inputError = tr("Touchpad encerrado por inatividade.", "Touchpad closed due to inactivity.")
                 keyboardController.releaseAllModifiers(null)
                 return
             }
@@ -325,12 +325,12 @@ internal fun ScreenStreamingScreen(
             if (event == Lifecycle.Event.ON_RESUME) {
                 val curInput = inputSession
                 if ((curInput == null && !inputConnecting) || (curInput != null && !curInput.isAlive())) {
-                    triggerInputReconnect(resetAttempts = true, hint = "Reconectando touchpad...")
+                    triggerInputReconnect(resetAttempts = true, hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."))
                 }
                 val curScreen = screenSession
                 if ((curScreen == null && !screenConnecting) || (curScreen != null && !curScreen.isAlive())) {
                     screenError = null
-                    screenConnectHint = "Reconectando vídeo..."
+                    screenConnectHint = tr("Reconectando vídeo...", "Reconnecting video...")
                     screenRetryNonce += 1
                 }
             }
@@ -350,13 +350,16 @@ internal fun ScreenStreamingScreen(
         streamInfo = null
         monitorSwitching = false
         monitorReauthPending = false
-        screenConnectHint = "Abrindo transmissão da tela..."
+        screenConnectHint = tr("Abrindo transmissão da tela...", "Opening screen stream...")
         val openingPreset = preset
 
         val hintJob = CoroutineScope(Dispatchers.Main).launch {
             delay(1100)
             if (active && screenConnecting) {
-                screenConnectHint = "Se aparecer aviso no PC, autorize o compartilhamento de tela"
+                screenConnectHint = tr(
+                    "Se aparecer aviso no PC, autorize o compartilhamento de tela",
+                    "If prompted on the PC, authorize screen sharing",
+                )
             }
         }
 
@@ -418,7 +421,7 @@ internal fun ScreenStreamingScreen(
                     monitorSwitching = false
                     monitorReauthPending = false
                     screenSession = null
-                    screenError = reason.ifBlank { "Transmissão de tela encerrada." }
+                    screenError = reason.ifBlank { tr("Transmissão de tela encerrada.", "Screen stream ended.") }
                 }
             }
         }
@@ -837,7 +840,7 @@ internal fun ScreenStreamingScreen(
             )
             if (showLabel) {
                 Text(
-                    text = if (showKeyboard) "Fechar" else "Teclado",
+                    text = if (showKeyboard) tr("Fechar", "Close") else tr("Teclado", "Keys"),
                     style = MaterialTheme.typography.labelMedium,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -872,7 +875,7 @@ internal fun ScreenStreamingScreen(
             )
             if (showLabel) {
                 Text(
-                    text = "Girar",
+                    text = tr("Girar", "Rotate"),
                     style = MaterialTheme.typography.labelMedium,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -941,7 +944,7 @@ internal fun ScreenStreamingScreen(
             )
             if (!compact) {
                 Text(
-                    text = "Sair",
+                    text = tr("Sair", "Exit"),
                     style = MaterialTheme.typography.labelMedium,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -1128,7 +1131,7 @@ internal fun ScreenStreamingScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Text(
-                            text = screenError ?: "Falha na transmissão.",
+                            text = screenError ?: tr("Falha na transmissão.", "Stream failed."),
                             style = MaterialTheme.typography.bodySmall,
                             color = OraculoColors.Error,
                             textAlign = TextAlign.Center,
@@ -1151,7 +1154,7 @@ internal fun ScreenStreamingScreen(
                                 modifier = Modifier.size(16.dp),
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Tentar novamente")
+                            Text(tr("Tentar novamente", "Try again"))
                         }
                     }
                 }
@@ -1471,7 +1474,7 @@ internal fun ScreenStreamingScreen(
                                 }
 
                                 OraculoDeckButton(
-                                    label = if (showKeyboard) "Fechar teclado" else "Abrir teclado",
+                                    label = if (showKeyboard) tr("Fechar teclado", "Close keyboard") else tr("Abrir teclado", "Open keyboard"),
                                     icon = if (showKeyboard) Icons.Default.KeyboardHide else Icons.Default.Keyboard,
                                     onClick = {
                                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -1530,17 +1533,24 @@ internal fun ScreenStreamingScreen(
                 textContentColor = OraculoColors.OnSurfaceMuted,
                 title = {
                     Text(
-                        text = "Liberar troca dos $avail monitores",
+                        text = tr("Liberar troca dos $avail monitores", "Enable switching across $avail monitors"),
                         style = MaterialTheme.typography.titleMedium,
                     )
                 },
                 text = {
                     Text(
-                        text = "O PC possui $avail monitores ativos, mas o GNOME só autorizou 1.\n\n" +
-                            "Para alternar direto do celular sem abrir janela no desktop:\n" +
-                            "1. No PC, rode `oraculo-host monitors` (ou abra o seletor agora se estiver na frente dele).\n" +
-                            "2. Clique para marcar TODOS os $avail monitores.\n" +
-                            "3. Deixe \"Lembrar esta seleção\" marcado e clique em Compartilhar.",
+                        text = tr(
+                            "O PC possui $avail monitores ativos, mas o GNOME só autorizou 1.\n\n" +
+                                "Para alternar direto do celular sem abrir janela no desktop:\n" +
+                                "1. No PC, rode `oraculo-host monitors` (ou abra o seletor agora se estiver na frente dele).\n" +
+                                "2. Clique para marcar TODOS os $avail monitores.\n" +
+                                "3. Deixe \"Lembrar esta seleção\" marcado e clique em Compartilhar.",
+                            "The PC has $avail active monitors, but GNOME only authorized 1.\n\n" +
+                                "To switch directly from your phone without opening a desktop prompt:\n" +
+                                "1. On the PC, run `oraculo-host monitors` (or open the picker now if you are in front of it).\n" +
+                                "2. Select ALL $avail monitors.\n" +
+                                "3. Keep \"Remember this selection\" checked and click Share.",
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                     )
                 },
@@ -1554,12 +1564,18 @@ internal fun ScreenStreamingScreen(
                             contentColor = OraculoColors.OnSecondaryContainer,
                         ),
                     ) {
-                        Text(if (monitorReauthPending) "Aberto no PC..." else "Abrir no PC agora")
+                        Text(
+                            if (monitorReauthPending) {
+                                tr("Aberto no PC...", "Opened on PC...")
+                            } else {
+                                tr("Abrir no PC agora", "Open on PC now")
+                            }
+                        )
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { showMonitorSetupDialog = false }) {
-                        Text("Fechar", color = OraculoColors.OnSurfaceMuted)
+                        Text(tr("Fechar", "Close"), color = OraculoColors.OnSurfaceMuted)
                     }
                 },
             )

@@ -103,6 +103,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences("oraculo_prefs", Context.MODE_PRIVATE)
+        AppI18n.init(prefs)
         val initialThemeMode = ThemeMode.fromPref(prefs.getString("theme_mode", null))
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
@@ -134,6 +135,9 @@ class MainActivity : ComponentActivity() {
                         themeMode = next
                         prefs.edit().putString("theme_mode", next.prefValue).apply()
                     },
+                    onToggleLang = {
+                        AppI18n.toggle(prefs)
+                    },
                 )
             }
         }
@@ -144,6 +148,7 @@ class MainActivity : ComponentActivity() {
 private fun OraculoApp(
     themeMode: ThemeMode,
     onCycleTheme: () -> Unit,
+    onToggleLang: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -206,7 +211,12 @@ private fun OraculoApp(
                 route = AppRoute.HostControl(pairedHost)
             }.onFailure { err ->
                 route = AppRoute.DeviceList
-                snackbarHostState.showSnackbar("Falha no pareamento: ${formatOraculoError(err)}")
+                snackbarHostState.showSnackbar(
+                    tr(
+                        "Falha no pareamento: ${formatOraculoError(err)}",
+                        "Pairing failed: ${formatOraculoError(err)}",
+                    ),
+                )
             }
         }
     }
@@ -225,7 +235,7 @@ private fun OraculoApp(
             if (initError != null) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = "Erro ao iniciar o nó P2P",
+                        text = tr("Erro ao iniciar o nó P2P", "Failed to start P2P node"),
                         style = MaterialTheme.typography.titleMedium,
                         color = OraculoColors.Error,
                     )
@@ -245,7 +255,7 @@ private fun OraculoApp(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "Iniciando nó Iroh",
+                        text = tr("Iniciando nó Iroh", "Starting Iroh node"),
                         style = MaterialTheme.typography.bodyMedium,
                         color = OraculoColors.OnSurfaceMuted,
                     )
@@ -292,6 +302,7 @@ private fun OraculoApp(
                     hosts = savedHosts,
                     themeMode = themeMode,
                     onCycleTheme = onCycleTheme,
+                    onToggleLang = onToggleLang,
                     snackbarHostState = snackbarHostState,
                     onSelectHost = { host -> route = AppRoute.HostControl(host) },
                     onScanQr = { route = AppRoute.QrScanner },
@@ -335,11 +346,14 @@ private fun OraculoApp(
             containerColor = OraculoColors.Surface,
             titleContentColor = OraculoColors.OnSurface,
             textContentColor = OraculoColors.OnSurface,
-            title = { Text("Parear via link") },
+            title = { Text(tr("Parear via link", "Pair via URI")) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "Cole a URI exibida pelo servidor ./dist/oraculo-host serve --pair:",
+                        text = tr(
+                            "Cole a URI exibida pelo comando oraculo-host pair:",
+                            "Paste the URI printed by oraculo-host pair:",
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = OraculoColors.OnSurfaceMuted,
                     )
@@ -371,7 +385,7 @@ private fun OraculoApp(
                     ),
                     modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
                 ) {
-                    Text(if (isPairing) "Pareando..." else "Parear")
+                    Text(if (isPairing) tr("Pareando...", "Pairing...") else tr("Parear", "Pair"))
                 }
             },
             dismissButton = {
@@ -381,7 +395,7 @@ private fun OraculoApp(
                     shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                     modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
                 ) {
-                    Text("Cancelar", color = OraculoColors.OnSurfaceMuted)
+                    Text(tr("Cancelar", "Cancel"), color = OraculoColors.OnSurfaceMuted)
                 }
             },
         )
@@ -394,10 +408,13 @@ private fun OraculoApp(
             containerColor = OraculoColors.Surface,
             titleContentColor = OraculoColors.OnSurface,
             textContentColor = OraculoColors.OnSurface,
-            title = { Text("Remover computador?") },
+            title = { Text(tr("Remover computador?", "Remove computer?")) },
             text = {
                 Text(
-                    "Remover '${pendingDelete.hostName}' da lista salva? Você poderá parear novamente lendo o QR Code."
+                    tr(
+                        "Remover '${pendingDelete.hostName}' da lista salva? Você poderá parear novamente lendo o QR Code.",
+                        "Remove '${pendingDelete.hostName}' from saved hosts? You can pair again later by scanning the QR Code.",
+                    )
                 )
             },
             confirmButton = {
@@ -418,7 +435,7 @@ private fun OraculoApp(
                     ),
                     modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
                 ) {
-                    Text("Remover")
+                    Text(tr("Remover", "Remove"))
                 }
             },
             dismissButton = {
@@ -427,7 +444,7 @@ private fun OraculoApp(
                     shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                     modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
                 ) {
-                    Text("Cancelar", color = OraculoColors.OnSurfaceMuted)
+                    Text(tr("Cancelar", "Cancel"), color = OraculoColors.OnSurfaceMuted)
                 }
             },
         )
@@ -437,7 +454,7 @@ private fun OraculoApp(
         AlertDialog(
             onDismissRequest = {},
             containerColor = OraculoColors.Surface,
-            title = { Text("Conectando ao computador", color = OraculoColors.OnSurface) },
+            title = { Text(tr("Conectando ao computador", "Connecting to computer"), color = OraculoColors.OnSurface) },
             text = {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -449,7 +466,7 @@ private fun OraculoApp(
                         strokeWidth = 2.5.dp,
                     )
                     Text(
-                        text = "Autenticando chaves P2P...",
+                        text = tr("Autenticando chaves P2P...", "Authenticating P2P keys..."),
                         color = OraculoColors.OnSurfaceMuted,
                     )
                 }
@@ -464,6 +481,7 @@ private fun DeviceListScreen(
     hosts: List<SavedHostInfo>,
     themeMode: ThemeMode,
     onCycleTheme: () -> Unit,
+    onToggleLang: () -> Unit,
     snackbarHostState: SnackbarHostState,
     onSelectHost: (SavedHostInfo) -> Unit,
     onScanQr: () -> Unit,
@@ -498,9 +516,9 @@ private fun DeviceListScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = when (hosts.size) {
-                            0 -> "Nenhum computador pareado"
-                            1 -> "1 computador salvo"
-                            else -> "${hosts.size} computadores salvos"
+                            0 -> tr("Nenhum computador pareado", "No paired computers")
+                            1 -> tr("1 computador salvo", "1 saved computer")
+                            else -> tr("${hosts.size} computadores salvos", "${hosts.size} saved computers")
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = OraculoColors.OnSurfaceMuted,
@@ -511,8 +529,32 @@ private fun DeviceListScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    val (themeSource, themePressed) = rememberPressedInteraction()
                     val headerShape = RoundedCornerShape(OraculoMetrics.CornerSmall)
+                    val (langSource, langPressed) = rememberPressedInteraction()
+                    Box(
+                        modifier = Modifier
+                            .height(OraculoMetrics.ControlHeightSmall)
+                            .oraculoPressScale(langPressed)
+                            .clip(headerShape)
+                            .background(OraculoColors.Surface)
+                            .border(1.dp, OraculoColors.Outline, headerShape)
+                            .clickable(
+                                interactionSource = langSource,
+                                indication = LocalIndication.current,
+                                onClick = onToggleLang,
+                            )
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = AppI18n.lang.badge,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = OraculoColors.OnSurface,
+                        )
+                    }
+                    val (themeSource, themePressed) = rememberPressedInteraction()
                     Row(
                         modifier = Modifier
                             .height(OraculoMetrics.ControlHeightSmall)
@@ -535,7 +577,7 @@ private fun DeviceListScreen(
                                 ThemeMode.LIGHT -> Icons.Default.LightMode
                                 ThemeMode.DARK -> Icons.Default.DarkMode
                             },
-                            contentDescription = "Alternar tema",
+                            contentDescription = tr("Alternar tema", "Toggle theme"),
                             tint = OraculoColors.OnSurfaceMuted,
                             modifier = Modifier.size(16.dp),
                         )
@@ -553,7 +595,7 @@ private fun DeviceListScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Link,
-                            contentDescription = "Colar link de pareamento",
+                            contentDescription = tr("Colar link de pareamento", "Paste pairing link"),
                             tint = OraculoColors.OnSurfaceMuted,
                             modifier = Modifier.size(18.dp),
                         )
@@ -595,13 +637,16 @@ private fun DeviceListScreen(
                             )
                         }
                         Text(
-                            text = "Nenhum computador conectado",
+                            text = tr("Nenhum computador conectado", "No computers connected"),
                             style = MaterialTheme.typography.titleMedium,
                             color = OraculoColors.OnSurface,
                             textAlign = TextAlign.Center,
                         )
                         Text(
-                            text = "Rode oraculo-host serve --pair no computador e leia o QR Code.",
+                            text = tr(
+                                "Rode oraculo-host pair no computador e leia o QR Code.",
+                                "Run oraculo-host pair on your computer and scan the QR Code.",
+                            ),
                             style = MaterialTheme.typography.bodyMedium,
                             color = OraculoColors.OnSurfaceMuted,
                             textAlign = TextAlign.Center,
@@ -661,7 +706,7 @@ private fun DeviceListScreen(
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.DeleteOutline,
-                                            contentDescription = "Remover ${host.hostName}",
+                                            contentDescription = tr("Remover ${host.hostName}", "Remove ${host.hostName}"),
                                             tint = OraculoColors.OnSurfaceMuted,
                                             modifier = Modifier.size(19.dp),
                                         )
@@ -707,7 +752,7 @@ private fun DeviceListScreen(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Parear novo computador",
+                        text = tr("Parear novo computador", "Pair new computer"),
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -722,7 +767,7 @@ private fun DeviceListScreen(
                             .height(OraculoMetrics.ControlHeightCta),
                     ) {
                         Text(
-                            text = "Colar link manualmente",
+                            text = tr("Colar link manualmente", "Paste link manually"),
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Medium,
                             color = OraculoColors.OnSurface,

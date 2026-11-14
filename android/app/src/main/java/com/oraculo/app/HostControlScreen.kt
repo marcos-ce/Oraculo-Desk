@@ -199,14 +199,22 @@ internal fun formatOraculoError(error: Throwable): String {
 }
 
 private enum class ControlTab(
-    val label: String,
-    val compactLabel: String,
+    private val ptLabel: String,
+    private val enLabel: String,
+    private val ptCompactLabel: String,
+    private val enCompactLabel: String,
     val icon: ImageVector,
 ) {
-    TOUCHPAD("Touchpad", "Touch", Icons.Default.TouchApp),
-    TERMINAL("Terminal", "Terminal", Icons.Default.Terminal),
-    COMMANDS("Comandos", "Ações", Icons.Default.Bolt),
-    FILES("Arquivos", "Arquivos", Icons.Default.Folder),
+    TOUCHPAD("Touchpad", "Touchpad", "Touch", "Touch", Icons.Default.TouchApp),
+    TERMINAL("Terminal", "Terminal", "Terminal", "Terminal", Icons.Default.Terminal),
+    COMMANDS("Comandos", "Commands", "Ações", "Actions", Icons.Default.Bolt),
+    FILES("Arquivos", "Files", "Arquivos", "Files", Icons.Default.Folder);
+
+    val label: String
+        get() = tr(ptLabel, enLabel)
+
+    val compactLabel: String
+        get() = tr(ptCompactLabel, enCompactLabel)
 }
 
 internal fun Context.findLifecycleOwner(): LifecycleOwner? {
@@ -255,7 +263,7 @@ fun HostControlScreen(
     HostSessionNotificationEffect(
         client = client,
         host = host,
-        modeLabel = if (isStreamingMode) "Espelhamento de tela" else selectedTab.label,
+        modeLabel = if (isStreamingMode) tr("Espelhamento de tela", "Screen mirroring") else selectedTab.label,
         onDisconnectRequested = onBack,
     )
 
@@ -620,7 +628,7 @@ private fun TouchpadTab(
     var resumeAfterPause by remember(host.endpointId) { mutableStateOf(false) }
     var inputSession by remember { mutableStateOf<MobileInputSession?>(null) }
     var isConnecting by remember { mutableStateOf(true) }
-    var connectHint by remember { mutableStateOf("Conectando touchpad...") }
+    var connectHint by remember { mutableStateOf(tr("Conectando touchpad...", "Connecting touchpad...")) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     var pointerSpeed by remember {
@@ -647,7 +655,7 @@ private fun TouchpadTab(
         inputSession = inputSession,
         onSessionBroken = { broken ->
             if (inputSession === broken && !isConnecting) {
-                triggerReconnectRef(false, "Reconectando touchpad...")
+                triggerReconnectRef(false, tr("Reconectando touchpad...", "Reconnecting touchpad..."))
             }
         },
         onPublishTelemetry = { publishTelemetry(it, 0L) },
@@ -661,7 +669,7 @@ private fun TouchpadTab(
             if (autoRetryAttempts >= 3) {
                 inputSession = null
                 isConnecting = false
-                errorMsg = "Conexão do touchpad encerrada por inatividade."
+                errorMsg = tr("Conexão do touchpad encerrada por inatividade.", "Touchpad connection closed due to inactivity.")
                 keyboardController.releaseAllModifiers(null)
                 return
             }
@@ -726,14 +734,17 @@ private fun TouchpadTab(
         isConnecting = true
         errorMsg = null
         if (autoRetryAttempts == 0) {
-            connectHint = "Conectando touchpad..."
+            connectHint = tr("Conectando touchpad...", "Connecting touchpad...")
         }
         keyboardController.resetState(null)
 
         val hintJob = CoroutineScope(Dispatchers.Main).launch {
             delay(1300)
             if (active && isConnecting) {
-                connectHint = "Se aparecer aviso no Fedora, clique em Compartilhar"
+                connectHint = tr(
+                    "Se aparecer aviso no Fedora, clique em Compartilhar",
+                    "If prompted on the PC, click Share to allow remote input",
+                )
             }
         }
 
@@ -743,7 +754,7 @@ private fun TouchpadTab(
                     if (!active) return@post
                     if (createdSession != null && inputSession === createdSession) {
                         createdSession = null
-                        triggerReconnect(resetAttempts = false, hint = "Reconectando touchpad...")
+                        triggerReconnect(resetAttempts = false, hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."))
                     }
                 }
             }
@@ -831,10 +842,10 @@ private fun TouchpadTab(
             errorMsg = errorMsg,
             pointerSpeed = pointerSpeed,
             naturalScroll = naturalScroll,
-            onRetry = { triggerReconnect(resetAttempts = true, hint = "Conectando touchpad...") },
+            onRetry = { triggerReconnect(resetAttempts = true, hint = tr("Conectando touchpad...", "Connecting touchpad...")) },
             onSessionBroken = { broken ->
                 if (inputSession === broken && !isConnecting) {
-                    triggerReconnect(resetAttempts = false, hint = "Reconectando touchpad...")
+                    triggerReconnect(resetAttempts = false, hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."))
                 }
             },
             onDisarmModifiers = { keyboardController.disarmArmedModifiers() },
@@ -850,7 +861,7 @@ private fun TouchpadTab(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             OraculoDeckButton(
-                label = if (showKeyboardBar) "Fechar teclado" else "Abrir teclado",
+                label = if (showKeyboardBar) tr("Fechar teclado", "Close keyboard") else tr("Abrir teclado", "Open keyboard"),
                 icon = if (showKeyboardBar) Icons.Default.KeyboardHide else Icons.Default.Keyboard,
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -861,7 +872,7 @@ private fun TouchpadTab(
                 modifier = Modifier.weight(1f),
             )
             OraculoDeckButton(
-                label = "Abrir tela",
+                label = tr("Abrir tela", "Open screen"),
                 icon = Icons.Default.DesktopWindows,
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -993,7 +1004,11 @@ private fun TouchpadSettingsDrawer(
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = if (naturalScroll) "Scroll natural: ON" else "Scroll natural: OFF",
+                            text = if (naturalScroll) {
+                                tr("Scroll natural: ON", "Natural scroll: ON")
+                            } else {
+                                tr("Scroll natural: OFF", "Natural scroll: OFF")
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = if (naturalScroll) OraculoColors.Primary else OraculoColors.OnSurfaceMuted,
                         )
@@ -1090,7 +1105,7 @@ internal fun TouchpadSurface(
                                     isDragging = false
                                     lastLeftTapUpMs = 0L
                                     currentDisarmArmed()
-                                    currentPublishTelemetry("solto", 0L)
+                                    currentPublishTelemetry(tr("solto", "released"), 0L)
                                 } else if (wentUpCount > 0) {
                                     if (maxPointers >= 2) {
                                         if (totalMove < viewConfiguration.touchSlop * 2.2f && elapsed < 320L) {
@@ -1100,7 +1115,7 @@ internal fun TouchpadSurface(
                                                 }
                                             ) {
                                                 currentDisarmArmed()
-                                                currentPublishTelemetry("botão direito", 0L)
+                                                currentPublishTelemetry(tr("botão direito", "right click"), 0L)
                                             }
                                         }
                                         lastLeftTapUpMs = 0L
@@ -1112,7 +1127,7 @@ internal fun TouchpadSurface(
                                         ) {
                                             currentDisarmArmed()
                                             lastLeftTapUpMs = System.currentTimeMillis()
-                                            currentPublishTelemetry("clique", 0L)
+                                            currentPublishTelemetry(tr("clique", "click"), 0L)
                                         }
                                     } else {
                                         lastLeftTapUpMs = 0L
@@ -1141,7 +1156,7 @@ internal fun TouchpadSurface(
                                         activeSession.movePointer(sx, sy)
                                     }
                                     currentPublishTelemetry(
-                                        if (isDragging) "arrastando" else "dx ${delta.x.roundToInt()}  dy ${delta.y.roundToInt()}",
+                                        if (isDragging) tr("arrastando", "dragging") else "dx ${delta.x.roundToInt()}  dy ${delta.y.roundToInt()}",
                                         55L,
                                     )
                                     change.consume()
@@ -1222,7 +1237,7 @@ internal fun TouchpadSurface(
                     ),
                 ) {
                     Text(
-                        text = "Tentar novamente",
+                        text = tr("Tentar novamente", "Try again"),
                         style = if (compactMode) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge,
                     )
                 }
@@ -1244,26 +1259,26 @@ internal fun TouchpadSurface(
                         textAlign = TextAlign.Center,
                     )
                     Text(
-                        text = "Toque: clicar · 2 dedos: direito/rolar",
+                        text = tr("Toque: clicar · 2 dedos: direito/rolar", "Tap: click · 2 fingers: right/scroll"),
                         style = MaterialTheme.typography.labelSmall,
                         color = OraculoColors.OnSurfaceMuted,
                         textAlign = TextAlign.Center,
                     )
                 } else {
                     Text(
-                        text = "Toque para clicar",
+                        text = tr("Toque para clicar", "Tap to click"),
                         style = MaterialTheme.typography.titleMedium,
                         color = OraculoColors.OnSurface,
                         textAlign = TextAlign.Center,
                     )
                     Text(
-                        text = "Toque duplo e arraste para mover janelas",
+                        text = tr("Toque duplo e arraste para mover janelas", "Double-tap and drag to move windows"),
                         style = MaterialTheme.typography.bodySmall,
                         color = OraculoColors.OnSurfaceMuted,
                         textAlign = TextAlign.Center,
                     )
                     Text(
-                        text = "Dois dedos: clique direito ou rolar",
+                        text = tr("Dois dedos: clique direito ou rolar", "Two fingers: right-click or scroll"),
                         style = MaterialTheme.typography.bodySmall,
                         color = OraculoColors.OnSurfaceMuted,
                         textAlign = TextAlign.Center,
@@ -1362,7 +1377,7 @@ internal fun TouchpadMouseButtonsRow(
         horizontalArrangement = Arrangement.spacedBy(if (compactLabels) 6.dp else 8.dp),
     ) {
         MouseKeyButton(
-            label = if (compactLabels) "Esq" else "Esquerdo",
+            label = if (compactLabels) tr("Esq", "L") else tr("Esquerdo", "Left"),
             enabled = enabled,
             fontSize = labelSize,
             cornerRadius = if (compactLabels) OraculoMetrics.CornerMedium else OraculoMetrics.CornerLarge,
@@ -1373,7 +1388,7 @@ internal fun TouchpadMouseButtonsRow(
         )
 
         MouseKeyButton(
-            label = "Meio",
+            label = if (compactLabels) tr("Meio", "M") else tr("Meio", "Middle"),
             enabled = enabled,
             fontSize = labelSize,
             cornerRadius = if (compactLabels) OraculoMetrics.CornerMedium else OraculoMetrics.CornerLarge,
@@ -1384,7 +1399,7 @@ internal fun TouchpadMouseButtonsRow(
         )
 
         MouseKeyButton(
-            label = if (compactLabels) "Dir" else "Direito",
+            label = if (compactLabels) tr("Dir", "R") else tr("Direito", "Right"),
             enabled = enabled,
             fontSize = labelSize,
             cornerRadius = if (compactLabels) OraculoMetrics.CornerMedium else OraculoMetrics.CornerLarge,
@@ -1590,8 +1605,10 @@ private fun TerminalTab(
     var session by remember { mutableStateOf<MobileTerminalSession?>(null) }
     var screenSnapshot by remember { mutableStateOf<TerminalScreenSnapshot?>(null) }
     var screenRevision by remember { mutableIntStateOf(0) }
-    var fallbackMessage by remember { mutableStateOf("Conectando PTY a ${host.hostName}...") }
-    var terminalStatus by remember { mutableStateOf("Conectando...") }
+    var fallbackMessage by remember {
+        mutableStateOf(tr("Conectando PTY a ${host.hostName}...", "Connecting PTY to ${host.hostName}..."))
+    }
+    var terminalStatus by remember { mutableStateOf(tr("Conectando...", "Connecting...")) }
     var remoteField by remember { mutableStateOf(TextFieldValue("")) }
     var syncedText by remember { mutableStateOf("") }
     var isConnecting by remember { mutableStateOf(true) }
@@ -1625,8 +1642,8 @@ private fun TerminalTab(
         withContext(Dispatchers.IO) {
             runCatching { activeSession.resize(termCols.toUShort(), termRows.toUShort()) }
         }
-        if (terminalStatus.startsWith("Shell ativo")) {
-            terminalStatus = "Shell ativo (${termCols}x${termRows})"
+        if (terminalStatus.startsWith("Shell ativo") || terminalStatus.startsWith("Active shell")) {
+            terminalStatus = tr("Shell ativo (${termCols}x${termRows})", "Active shell (${termCols}x${termRows})")
         }
     }
 
@@ -1638,8 +1655,8 @@ private fun TerminalTab(
         isConnecting = true
         screenSnapshot = null
         screenRevision = 0
-        fallbackMessage = "Conectando PTY a ${host.hostName}..."
-        terminalStatus = "Abrindo shell..."
+        fallbackMessage = tr("Conectando PTY a ${host.hostName}...", "Connecting PTY to ${host.hostName}...")
+        terminalStatus = tr("Abrindo shell...", "Opening shell...")
         remoteField = TextFieldValue("")
         syncedText = ""
 
@@ -1659,7 +1676,10 @@ private fun TerminalTab(
                                 lastBellCount = latest.bellCount
                                 visualBellActive = true
                             }
-                            terminalStatus = "Shell ativo (${latest.cols}x${latest.rows})"
+                            terminalStatus = tr(
+                                "Shell ativo (${latest.cols}x${latest.rows})",
+                                "Active shell (${latest.cols}x${latest.rows})",
+                            )
                             isConnecting = false
                         }
                     }
@@ -1668,7 +1688,7 @@ private fun TerminalTab(
                 override fun onSessionEnded(exitCode: Int) {
                     mainHandler.post {
                         if (active) {
-                            terminalStatus = "Encerrado (exit $exitCode)"
+                            terminalStatus = tr("Encerrado (exit $exitCode)", "Ended (exit $exitCode)")
                             isConnecting = false
                         }
                     }
@@ -1677,7 +1697,7 @@ private fun TerminalTab(
                 override fun onError(message: String) {
                     mainHandler.post {
                         if (active) {
-                            terminalStatus = "Erro: $message"
+                            terminalStatus = tr("Erro: $message", "Error: $message")
                             isConnecting = false
                         }
                     }
@@ -1698,7 +1718,10 @@ private fun TerminalTab(
                     openedSession = created
                     withContext(Dispatchers.Main) {
                         session = created
-                        terminalStatus = "Shell ativo (${termCols}x${termRows})"
+                        terminalStatus = tr(
+                            "Shell ativo (${termCols}x${termRows})",
+                            "Active shell (${termCols}x${termRows})",
+                        )
                         isConnecting = false
                     }
                 } else {
@@ -1713,8 +1736,11 @@ private fun TerminalTab(
                         isConnecting = false
                         screenSnapshot = null
                         screenRevision = 0
-                        terminalStatus = "Falha na conexão"
-                        fallbackMessage = "Não foi possível abrir o terminal:\n${formatOraculoError(err)}"
+                        terminalStatus = tr("Falha na conexão", "Connection failed")
+                        fallbackMessage = tr(
+                            "Não foi possível abrir o terminal:\n${formatOraculoError(err)}",
+                            "Could not open terminal:\n${formatOraculoError(err)}",
+                        )
                     }
                 }
             }
@@ -1895,9 +1921,9 @@ private fun TerminalTab(
                 placeholder = {
                     Text(
                         if (session != null) {
-                            "Digite em tempo real no shell..."
+                            tr("Digite em tempo real no shell...", "Type live into the shell...")
                         } else {
-                            "Aguardando shell..."
+                            tr("Aguardando shell...", "Waiting for shell...")
                         },
                     )
                 },
@@ -2416,11 +2442,11 @@ private fun CommandsTab(
         val commandLine = editCommandLine.trim()
         val description = editDescription.trim()
         if (label.isEmpty()) {
-            editorError = "Informe um nome para o comando."
+            editorError = tr("Informe um nome para o comando.", "Enter a name for the command.")
             return
         }
         if (commandLine.isEmpty()) {
-            editorError = "Informe a linha de comando a executar."
+            editorError = tr("Informe a linha de comando a executar.", "Enter the command line to execute.")
             return
         }
 
@@ -2516,13 +2542,16 @@ private fun CommandsTab(
             containerColor = OraculoColors.Surface,
             title = {
                 Text(
-                    text = "Remover comando?",
+                    text = tr("Remover comando?", "Delete command?"),
                     color = OraculoColors.OnSurface,
                 )
             },
             text = {
                 Text(
-                    text = "\"${target.label}\" será removido de commands.toml no computador.",
+                    text = tr(
+                        "\"${target.label}\" será removido de commands.toml no computador.",
+                        "\"${target.label}\" will be removed from commands.toml on the computer.",
+                    ),
                     color = OraculoColors.OnSurfaceMuted,
                 )
             },
@@ -2532,7 +2561,7 @@ private fun CommandsTab(
                     shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                     modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
                 ) {
-                    Text("Remover", color = OraculoColors.Error)
+                    Text(tr("Remover", "Delete"), color = OraculoColors.Error)
                 }
             },
             dismissButton = {
@@ -2541,7 +2570,7 @@ private fun CommandsTab(
                     shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                     modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
                 ) {
-                    Text("Cancelar", color = OraculoColors.OnSurfaceMuted)
+                    Text(tr("Cancelar", "Cancel"), color = OraculoColors.OnSurfaceMuted)
                 }
             },
         )
@@ -2560,7 +2589,7 @@ private fun CommandsTab(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                text = "Comandos",
+                text = tr("Comandos", "Commands"),
                 style = MaterialTheme.typography.titleMedium,
                 color = OraculoColors.OnSurface,
                 modifier = Modifier.weight(1f),
@@ -2596,7 +2625,7 @@ private fun CommandsTab(
                         modifier = Modifier.size(16.dp),
                     )
                     Text(
-                        text = "Novo",
+                        text = tr("Novo", "New"),
                         style = MaterialTheme.typography.labelLarge,
                         fontSize = 13.sp,
                         color = OraculoColors.OnSurface,
@@ -2651,7 +2680,10 @@ private fun CommandsTab(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "Nenhum comando salvo ainda.\nToque em \"+ Novo\" para criar o primeiro.",
+                    text = tr(
+                        "Nenhum comando salvo ainda.\nToque em \"+ Novo\" para criar o primeiro.",
+                        "No saved commands yet.\nTap \"+ New\" to create the first one.",
+                    ),
                     style = MaterialTheme.typography.bodyMedium,
                     color = OraculoColors.OnSurfaceMuted,
                     textAlign = TextAlign.Center,
@@ -2727,7 +2759,7 @@ private fun CommandEditorDialog(
         containerColor = OraculoColors.Surface,
         title = {
             Text(
-                text = if (isEditing) "Editar comando" else "Novo comando",
+                text = if (isEditing) tr("Editar comando", "Edit command") else tr("Novo comando", "New command"),
                 color = OraculoColors.OnSurface,
             )
         },
@@ -2741,8 +2773,8 @@ private fun CommandEditorDialog(
                 OutlinedTextField(
                     value = label,
                     onValueChange = onLabelChange,
-                    label = { Text("Nome") },
-                    placeholder = { Text("Ex.: Reiniciar Áudio") },
+                    label = { Text(tr("Nome", "Name")) },
+                    placeholder = { Text(tr("Ex.: Reiniciar Áudio", "e.g. Restart Audio")) },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
                     colors = fieldColors,
@@ -2751,7 +2783,7 @@ private fun CommandEditorDialog(
                 OutlinedTextField(
                     value = commandLine,
                     onValueChange = onCommandLineChange,
-                    label = { Text("Comando shell") },
+                    label = { Text(tr("Comando shell", "Shell command")) },
                     placeholder = { Text("Ex.: systemctl --user restart pipewire") },
                     singleLine = true,
                     textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
@@ -2762,15 +2794,18 @@ private fun CommandEditorDialog(
                 OutlinedTextField(
                     value = description,
                     onValueChange = onDescriptionChange,
-                    label = { Text("Descrição (opcional)") },
-                    placeholder = { Text("Resumo curto exibido no cartão") },
+                    label = { Text(tr("Descrição (opcional)", "Description (optional)")) },
+                    placeholder = { Text(tr("Resumo curto exibido no cartão", "Short summary shown on card")) },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
                     colors = fieldColors,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    text = "Suporta argumentos com aspas; salvo em commands.toml no computador.",
+                    text = tr(
+                        "Suporta argumentos com aspas; salvo em commands.toml no computador.",
+                        "Supports quoted arguments; saved in commands.toml on the computer.",
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = OraculoColors.OnSurfaceMuted,
                 )
@@ -2801,7 +2836,7 @@ private fun CommandEditorDialog(
                         strokeWidth = 2.dp,
                     )
                 } else {
-                    Text("Salvar")
+                    Text(tr("Salvar", "Save"))
                 }
             }
         },
@@ -2812,7 +2847,7 @@ private fun CommandEditorDialog(
                 shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                 modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
             ) {
-                Text("Cancelar", color = OraculoColors.OnSurfaceMuted)
+                Text(tr("Cancelar", "Cancel"), color = OraculoColors.OnSurfaceMuted)
             }
         },
     )
@@ -2945,7 +2980,7 @@ private fun CommandOutputCard(
                 if (isNotEmpty()) append("\n--- stderr ---\n")
                 append(result.stderr.trimEnd())
             }
-            if (isEmpty()) append("(sem saída)")
+            if (isEmpty()) append(tr("(sem saída)", "(no output)"))
         }
     }
 

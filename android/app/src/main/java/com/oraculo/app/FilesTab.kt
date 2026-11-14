@@ -218,7 +218,7 @@ internal fun FilesTab(
                 endpointId = host.endpointId,
                 remoteRelPath = entry.relPath,
                 destLocalPath = dest.absolutePath,
-                observer = buildObserver("Baixando ${entry.name}", isUpload = false),
+                observer = buildObserver(tr("Baixando ${entry.name}", "Downloading ${entry.name}"), isUpload = false),
             )
             dest
         }
@@ -243,9 +243,12 @@ internal fun FilesTab(
                     }
                 }
                 saveRes.onSuccess { savedLabel ->
-                    statusMessage = "Salvo em $savedLabel"
+                    statusMessage = tr("Salvo em $savedLabel", "Saved to $savedLabel")
                 }.onFailure { err ->
-                    errorMessage = "Falha ao salvar em Downloads: ${formatOraculoError(err)}"
+                    errorMessage = tr(
+                        "Falha ao salvar em Downloads: ${formatOraculoError(err)}",
+                        "Failed to save to Downloads: ${formatOraculoError(err)}",
+                    )
                 }
             }.onFailure { err ->
                 errorMessage = formatOraculoError(err)
@@ -279,7 +282,10 @@ internal fun FilesTab(
         selectedEntry = null
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         if (!isImageEntry(entry) && entry.size > 8UL * 1024UL * 1024UL) {
-            errorMessage = "Arquivo muito grande para prévia de texto (${formatFileSize(entry.size.toLong())}). Use Salvar em Downloads."
+            errorMessage = tr(
+                "Arquivo muito grande para prévia de texto (${formatFileSize(entry.size.toLong())}). Use Salvar em Downloads.",
+                "File too large for text preview (${formatFileSize(entry.size.toLong())}). Use Save to Downloads.",
+            )
             return
         }
         scope.launch {
@@ -291,7 +297,7 @@ internal fun FilesTab(
                     runCatching {
                         if (isImageEntry(entry)) {
                             val bmp = decodeScaledBitmap(cached, maxSidePx = 2048)
-                                ?: error("Formato de imagem não suportado pelo Android")
+                                ?: error(tr("Formato de imagem não suportado pelo Android", "Image format not supported by Android"))
                             FilePreviewState.ImagePreview(entry, bmp, cached)
                         } else {
                             val maxPreviewBytes = 512 * 1024
@@ -307,7 +313,7 @@ internal fun FilesTab(
                             }
                             val text = if (bytes.size > maxPreviewBytes) {
                                 String(bytes, 0, maxPreviewBytes, Charsets.UTF_8) +
-                                    "\n\n[... prévia truncada em 512 KB ...]"
+                                    tr("\n\n[... prévia truncada em 512 KB ...]", "\n\n[... preview truncated at 512 KB ...]")
                             } else {
                                 String(bytes, Charsets.UTF_8)
                             }
@@ -318,7 +324,10 @@ internal fun FilesTab(
                 decoded.onSuccess { preview ->
                     previewState = preview
                 }.onFailure { err ->
-                    errorMessage = "Não foi possível abrir prévia: ${formatOraculoError(err)}"
+                    errorMessage = tr(
+                        "Não foi possível abrir prévia: ${formatOraculoError(err)}",
+                        "Could not open preview: ${formatOraculoError(err)}",
+                    )
                 }
             }.onFailure { err ->
                 errorMessage = formatOraculoError(err)
@@ -352,7 +361,7 @@ internal fun FilesTab(
                             FileOutputStream(tempFile).use { output ->
                                 input.copyTo(output, bufferSize = 64 * 1024)
                             }
-                        } ?: error("Não foi possível ler o arquivo selecionado")
+                        } ?: error(tr("Não foi possível ler o arquivo selecionado", "Could not read selected file"))
 
                         val prefix = if (uris.size > 1) "[${index + 1}/${uris.size}] " else ""
                         val res = client.uploadFile(
@@ -361,7 +370,10 @@ internal fun FilesTab(
                             remoteDirRelPath = targetDir,
                             fileName = displayName,
                             overwrite = false,
-                            observer = buildObserver("${prefix}Enviando $displayName", isUpload = true),
+                            observer = buildObserver(
+                                tr("${prefix}Enviando $displayName", "${prefix}Uploading $displayName"),
+                                isUpload = true,
+                            ),
                         )
                         Result.success(res)
                     } catch (err: Throwable) {
@@ -383,9 +395,10 @@ internal fun FilesTab(
             transferState = null
             if (uploadedCount > 0) {
                 statusMessage = if (uploadedCount == 1) {
-                    "Enviado para ~/$lastSavedRel"
+                    tr("Enviado para ~/$lastSavedRel", "Uploaded to ~/$lastSavedRel")
                 } else {
-                    "$uploadedCount arquivos enviados para ${if (targetDir.isEmpty()) "~" else "~/$targetDir"}"
+                    val destLabel = if (targetDir.isEmpty()) "~" else "~/$targetDir"
+                    tr("$uploadedCount arquivos enviados para $destLabel", "$uploadedCount files uploaded to $destLabel")
                 }
                 loadDirectory(targetDir)
             }
@@ -427,7 +440,7 @@ internal fun FilesTab(
                         }
                     }
                     saveRes.onSuccess { savedLabel ->
-                        statusMessage = "Salvo em $savedLabel"
+                        statusMessage = tr("Salvo em $savedLabel", "Saved to $savedLabel")
                     }.onFailure { err ->
                         errorMessage = formatOraculoError(err)
                     }
@@ -460,7 +473,7 @@ internal fun FilesTab(
             ) {
                 Icon(
                     imageVector = Icons.Default.ArrowUpward,
-                    contentDescription = "Pasta acima",
+                    contentDescription = tr("Pasta acima", "Parent folder"),
                     tint = if (listing?.parentPath != null) OraculoColors.OnSurface else OraculoColors.OnSurfaceMuted.copy(alpha = 0.4f),
                     modifier = Modifier.size(18.dp),
                 )
@@ -468,7 +481,7 @@ internal fun FilesTab(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (currentPath.isEmpty()) "Pasta pessoal (~)" else currentPath.substringAfterLast('/'),
+                    text = if (currentPath.isEmpty()) tr("Pasta pessoal (~)", "Home folder (~)") else currentPath.substringAfterLast('/'),
                     style = MaterialTheme.typography.titleMedium,
                     color = OraculoColors.OnSurface,
                     maxLines = 1,
@@ -562,7 +575,7 @@ internal fun FilesTab(
                         modifier = Modifier.size(16.dp),
                     )
                     Text(
-                        text = "Enviar",
+                        text = tr("Enviar", "Upload"),
                         style = MaterialTheme.typography.labelLarge,
                         fontSize = 13.sp,
                         color = OraculoColors.OnPrimary,
@@ -637,7 +650,7 @@ internal fun FilesTab(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                placeholder = { Text("Filtrar nesta pasta...", fontSize = 13.sp) },
+                placeholder = { Text(tr("Filtrar nesta pasta...", "Filter in this folder..."), fontSize = 13.sp) },
                 singleLine = true,
                 leadingIcon = {
                     Icon(
@@ -811,9 +824,15 @@ internal fun FilesTab(
             ) {
                 Text(
                     text = if (searchQuery.isBlank()) {
-                        "Pasta vazia.\nUse \"Enviar\" acima para mandar arquivos do celular."
+                        tr(
+                            "Pasta vazia.\nUse \"Enviar\" acima para mandar arquivos do celular.",
+                            "Empty folder.\nUse \"Upload\" above to send files from your phone.",
+                        )
                     } else {
-                        "Nenhum arquivo corresponde a \"$searchQuery\"."
+                        tr(
+                            "Nenhum arquivo corresponde a \"$searchQuery\".",
+                            "No files match \"$searchQuery\".",
+                        )
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = OraculoColors.OnSurfaceMuted,
@@ -899,7 +918,13 @@ private fun FileEntryActionDialog(
                             modifier = Modifier.size(18.dp),
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(if (canPreviewImage) "Visualizar imagem aqui" else "Visualizar texto aqui")
+                        Text(
+                            if (canPreviewImage) {
+                                tr("Visualizar imagem aqui", "Preview image here")
+                            } else {
+                                tr("Visualizar texto aqui", "Preview text here")
+                            }
+                        )
                     }
                 }
 
@@ -920,7 +945,7 @@ private fun FileEntryActionDialog(
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Baixar para Downloads")
+                    Text(tr("Baixar para Downloads", "Save to Downloads"))
                 }
 
                 Row(
@@ -940,7 +965,7 @@ private fun FileEntryActionDialog(
                             modifier = Modifier.size(16.dp),
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Abrir com")
+                        Text(tr("Abrir com", "Open with"))
                     }
                     OutlinedButton(
                         onClick = onShare,
@@ -955,7 +980,7 @@ private fun FileEntryActionDialog(
                             modifier = Modifier.size(16.dp),
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Enviar")
+                        Text(tr("Enviar", "Share"))
                     }
                 }
             }
@@ -966,7 +991,7 @@ private fun FileEntryActionDialog(
                 shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                 modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
             ) {
-                Text("Fechar", color = OraculoColors.OnSurfaceMuted)
+                Text(tr("Fechar", "Close"), color = OraculoColors.OnSurfaceMuted)
             }
         },
     )
@@ -1030,7 +1055,7 @@ private fun FilePreviewDialog(
                     ) {
                         SelectionContainer {
                             Text(
-                                text = previewState.content.ifEmpty { "(arquivo vazio)" },
+                                text = previewState.content.ifEmpty { tr("(arquivo vazio)", "(empty file)") },
                                 style = TextStyle(
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 11.5.sp,
@@ -1050,7 +1075,7 @@ private fun FilePreviewDialog(
                 shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                 modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
             ) {
-                Text("Baixar", color = OraculoColors.Primary)
+                Text(tr("Baixar", "Download"), color = OraculoColors.Primary)
             }
         },
         dismissButton = {
@@ -1059,7 +1084,7 @@ private fun FilePreviewDialog(
                 shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                 modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
             ) {
-                Text("Fechar", color = OraculoColors.OnSurfaceMuted)
+                Text(tr("Fechar", "Close"), color = OraculoColors.OnSurfaceMuted)
             }
         },
     )
@@ -1112,7 +1137,7 @@ private fun FileEntryRow(
             )
             Spacer(modifier = Modifier.height(2.dp))
             val subtitle = if (entry.isDir) {
-                "Pasta • ${formatUnixDate(entry.modifiedUnix.toLong())}"
+                "${tr("Pasta", "Folder")} • ${formatUnixDate(entry.modifiedUnix.toLong())}"
             } else {
                 "${formatFileSize(entry.size.toLong())} • ${formatUnixDate(entry.modifiedUnix.toLong())}"
             }

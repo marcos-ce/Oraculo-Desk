@@ -198,23 +198,23 @@ internal class RemoteInputController(
             ModifierLatchState.OFF -> {
                 if (sendOnSession(session) { it.pressKey(mod.remoteKey, true) }) {
                     modifierStates[mod] = ModifierLatchState.ARMED
-                    onPublishTelemetryProvider().invoke("${mod.label} armado (1x)")
+                    onPublishTelemetryProvider().invoke(tr("${mod.label} armado (1x)", "${mod.label} armed (1x)"))
                 }
             }
             ModifierLatchState.ARMED -> {
                 if (now - prevTap <= 480L) {
                     modifierStates[mod] = ModifierLatchState.LOCKED
-                    onPublishTelemetryProvider().invoke("${mod.label} travado")
+                    onPublishTelemetryProvider().invoke(tr("${mod.label} travado", "${mod.label} locked"))
                 } else {
                     modifierStates[mod] = ModifierLatchState.OFF
                     sendOnSession(session) { it.pressKey(mod.remoteKey, false) }
-                    onPublishTelemetryProvider().invoke("${mod.label} solto")
+                    onPublishTelemetryProvider().invoke(tr("${mod.label} solto", "${mod.label} released"))
                 }
             }
             ModifierLatchState.LOCKED -> {
                 modifierStates[mod] = ModifierLatchState.OFF
                 sendOnSession(session) { it.pressKey(mod.remoteKey, false) }
-                onPublishTelemetryProvider().invoke("${mod.label} destravado")
+                onPublishTelemetryProvider().invoke(tr("${mod.label} destravado", "${mod.label} unlocked"))
             }
         }
     }
@@ -262,7 +262,7 @@ internal class RemoteInputController(
                 val payload = if (!shiftHeld) rawInserted.lowercase() else rawInserted
                 if (payload.isNotEmpty() && sendOnSession(session) { it.sendText(payload) }) {
                     disarmArmedModifiers()
-                    onPublishTelemetryProvider().invoke("atalho + $payload")
+                    onPublishTelemetryProvider().invoke(tr("atalho + $payload", "shortcut + $payload"))
                 }
             } else if (newText.length < syncedText.length) {
                 if (sendOnSession(session) { it.sendKey(MobileRemoteKey.BACKSPACE) }) {
@@ -627,11 +627,11 @@ internal fun RemoteKeyboardBar(
             OraculoMetrics.ControlHeightInput
         }
         val placeholderLabel = if (controller.shortcutModifierHeld) {
-            "Atalho ativo: digite a tecla (ex.: d, c, v)..."
+            tr("Atalho ativo: digite a tecla (ex.: d, c, v)...", "Shortcut active: type key (e.g. d, c, v)...")
         } else if (compact) {
-            "Digitar no PC..."
+            tr("Digitar no PC...", "Type on PC...")
         } else {
-            "Digite ao vivo na janela ativa do PC..."
+            tr("Digite ao vivo na janela ativa do PC...", "Type live into the active PC window...")
         }
         val fieldShape = RoundedCornerShape(OraculoMetrics.CornerMedium)
 

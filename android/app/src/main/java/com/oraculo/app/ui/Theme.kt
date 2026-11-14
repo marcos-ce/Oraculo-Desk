@@ -208,10 +208,13 @@ fun OraculoSquareIconButton(
     }
 }
 
-enum class ThemeMode(val prefValue: String, val label: String) {
-    SYSTEM("system", "Auto"),
-    LIGHT("light", "Claro"),
-    DARK("dark", "Escuro");
+enum class ThemeMode(val prefValue: String, private val ptLabel: String, private val enLabel: String) {
+    SYSTEM("system", "Auto", "Auto"),
+    LIGHT("light", "Claro", "Light"),
+    DARK("dark", "Escuro", "Dark");
+
+    val label: String
+        get() = com.oraculo.app.tr(ptLabel, enLabel)
 
     fun next(): ThemeMode = when (this) {
         SYSTEM -> LIGHT
