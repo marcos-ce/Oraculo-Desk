@@ -1,32 +1,19 @@
 # Oráculo (Oraculo-Desk)
 
-> Peer-to-peer remote desktop, interactive PTY terminal, host telemetry, and sandboxed file manager over QUIC (`iroh`). Written in Rust and Kotlin for Linux (Wayland/X11), Windows, and Android.
+> Peer-to-peer remote desktop, interactive PTY terminal, quick commands, and home-sandboxed file browser over `iroh` encrypted QUIC (`ALPN: oraculo/1`), written in Rust (edition 2024) and Kotlin (Jetpack Compose).
 
-Repository: https://github.com/marcos-ce/Oraculo-Desk
-License: Apache-2.0 ([LICENSE](../licenses/LICENSE), [NOTICE](../licenses/NOTICE))
-Languages: Rust (Edition 2024), Kotlin (Android API 26-34, Jetpack Compose)
+## Documentation & Policies
 
-## Technical capabilities and search keywords
+- [English README](../README.md): Architecture overview, platform support matrix, CLI commands, security model, and Podman build workflow.
+- [Portuguese README](../README.pt-BR.md): Documentação completa em Português (Brasil).
+- [Agent Guide](AGENTS.md): Workspace boundaries, build commands, and critical invariants for automated tooling.
+- [Security Policy](SECURITY.md): Security model and vulnerability reporting guidance.
+- [License (Apache-2.0)](../licenses/LICENSE): License text and [third-party notices](../licenses/NOTICE).
 
-- P2P QUIC transport (`iroh` 1.4, ALPN `oraculo/p2p/1`): end-to-end encrypted TLS 1.3 connections authenticated by Ed25519 keys (`EndpointId`), automatic NAT hole punching, and relay fallback without port forwarding or central accounts.
-- Wayland and PipeWire H.264 screen streaming: `xdg-desktop-portal` (`ashpd`) ScreenCast with persistent restore tokens (`PersistMode::ExplicitlyRevoked`), PipeWire FD handoff, and GStreamer hardware encoding (`nvh264enc` NVENC, `vah264enc`/`vaapih264enc` VA-API, `openh264enc`, `x264enc`) decoded on Android via hardware `MediaCodec` (`SurfaceView`).
-- Pre-login and fallback display capture: direct Linux DRM/KMS framebuffer capture (`/dev/dri/card*` with `CAP_SYS_ADMIN`) for physical TTYs and login screens (GDM), plus `xcap` capture on X11 and Windows.
-- Multi-backend remote input: Wayland `RemoteDesktop` portal, Linux `/dev/uinput` kernel virtual devices (absolute touch tablet, relative mouse, X11 keysym-to-keycode mapper), and `enigo` fallback.
-- Remote PTY terminal: native pseudo-terminal (`portable-pty`) streamed over QUIC and parsed into an in-memory `vt100` terminal grid in Rust (`oraculo-mobile-core`) exposed to Android via `uniffi` (`0.32`).
-- Sandboxed file manager: browse, preview images and text, download, and upload files confined to the host user's canonicalized home directory (`~`) with symlink escape prevention and a credential blocklist (`.ssh`, `.gnupg`, `.config/oraculo`, shell rc files).
-- Host telemetry, quick commands, and power control: real-time CPU, RAM, swap, network, and process monitoring (`sysinfo`), bounded execution of pre-authorized commands (`commands.toml`), session lock/suspend/reboot/poweroff, and UDP Wake-on-LAN (`255.255.255.255:9`).
+## Workspace Crates
 
-## Key files
-
-- [README.md](../README.md): English architecture, security model, build instructions, and CLI reference.
-- [README.pt-BR.md](../README.pt-BR.md): Documentação técnica completa em português.
-- [AGENTS.md](AGENTS.md): Build workflow, crate boundaries, and invariants for autonomous AI coding agents.
-- [Cargo.toml](../Cargo.toml): Rust workspace manifest.
-- [crates/oraculo-proto/src/lib.rs](../crates/oraculo-proto/src/lib.rs): Wire protocol messages (`ControlRequest`, `TerminalClientMsg`, `InputEvent`, `ScreenHostMsg`, `FileClientMsg`) and framing.
-- [crates/oraculo-host/src/server.rs](../crates/oraculo-host/src/server.rs): Host QUIC server, pairing verification, and stream routing.
-- [crates/oraculo-host/src/screen.rs](../crates/oraculo-host/src/screen.rs): Wayland PipeWire + GStreamer H.264 encoder pipeline, DRM/KMS reader, and multi-monitor switching.
-- [crates/oraculo-host/src/input.rs](../crates/oraculo-host/src/input.rs): Wayland RemoteDesktop portal and `/dev/uinput` virtual input devices.
-- [crates/oraculo-host/src/files.rs](../crates/oraculo-host/src/files.rs): Home-directory sandbox, path validation, and streaming file transfers.
-- [crates/oraculo-mobile-core/src/lib.rs](../crates/oraculo-mobile-core/src/lib.rs): UniFFI mobile client library, connection pool, `vt100` emulator, and H.264 frame queue.
-- [android/app/src/main/java/com/oraculo/app/ScreenStreamingScreen.kt](../android/app/src/main/java/com/oraculo/app/ScreenStreamingScreen.kt): Android interactive remote desktop view, touch/trackpad gestures, and stream controls.
-- [android/app/src/main/java/com/oraculo/app/HostControlScreen.kt](../android/app/src/main/java/com/oraculo/app/HostControlScreen.kt): Android host control dashboard (Terminal, Commands, System telemetry, Files).
+- [`crates/oraculo-proto`](../crates/oraculo-proto): Length-prefixed `postcard` protocol (`MAX_FRAME_SIZE = 4 MiB`, `FILE_CHUNK_SIZE = 128 KiB`), `StreamKind` (`Pair=1`, `Control=2`, `Terminal=3`, `Input=4`, `Files=5`, `Screen=6`), and `ControlRequest`/`ControlResponse`.
+- [`crates/oraculo-host`](../crates/oraculo-host): Host daemon (`serve [--pair]`, `peers`, `revoke`, `permissions`, `info`, `monitors`), Linux Wayland `xdg-desktop-portal` ScreenCast (PipeWire + GStreamer H.264) and RemoteDesktop input, `portable-pty` terminal, `commands.toml` runner, and `~` file sandbox.
+- [`crates/oraculo-cli`](../crates/oraculo-cli): Terminal client (`pair`, `ping`, `commands`, `run`, `shell`).
+- [`crates/oraculo-mobile-core`](../crates/oraculo-mobile-core): UniFFI-exported (`OraculoMobileClient`) QUIC connection pool, `vt100` terminal parser, H.264 NAL normalizer, and file transfer engine for Android `arm64-v8a`.
+- [`android/`](../android/): Jetpack Compose client (`minSdk = 26`, `targetSdk = 35`) with hardware `MediaCodec` video decoder, bilingual `PT`/`EN` UI, `Touchpad`/`Terminal`/`Commands`/`Files` tabs, and foreground session service.

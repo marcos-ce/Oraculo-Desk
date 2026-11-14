@@ -1,136 +1,132 @@
-# Oráculo Desk
+# Oráculo
 
-Language: **English** | [Português (Brasil)](README.pt-BR.md) 
+[![CI](https://github.com/marcos-ce/Oraculo-Desk/actions/workflows/ci.yml/badge.svg)](https://github.com/marcos-ce/Oraculo-Desk/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](licenses/LICENSE)
+[![Rust](https://img.shields.io/badge/rust-edition%202024-orange.svg)](Cargo.toml)
+[![Android](https://img.shields.io/badge/android-API%2026%2B%20(arm64)-3ddc84.svg)](android/app/build.gradle.kts)
 
-Oráculo Desk is a self-hosted, peer-to-peer remote desktop and host management suite built in Rust and Kotlin. It lets you control a Linux (Wayland or X11) or Windows computer from an Android phone or another computer over direct QUIC connections (`iroh`), bypassing NATs and firewalls without port forwarding, dynamic DNS, or third-party accounts.
+*Read this in [Português (Brasil)](README.pt-BR.md).*
 
-## Overview
+**Oráculo** is a peer-to-peer remote desktop, interactive terminal, and home-sandboxed file access suite written in **Rust** and **Kotlin** (Jetpack Compose). Connections run directly over encrypted QUIC streams powered by [iroh](https://github.com/n0-computer/iroh) (`ALPN: oraculo/1`), using `Ed25519` peer identities without manual port forwarding or central relay accounts.
 
-Most remote desktop tools either struggle with Linux Wayland sessions, require creating an account on a central broker, or compress the entire desktop experience into a tiny mouse-only viewer. Oráculo Desk separates everyday host tasks into dedicated, low-overhead modules that run over a single encrypted P2P connection:
+---
 
-- Low-latency H.264 remote desktop with hardware-accelerated encoding (NVIDIA NVENC, VA-API, OpenH264, or x264), direct touch mode, relative trackpad mode, two-finger scroll, pinch-to-zoom up to 4x, multi-monitor switching from the phone, landscape fullscreen mode for external keyboards and mice, and an on-screen modifier bar (`Ctrl`, `Alt`, `Super`, `Esc`, `Tab`, arrows, `F1`-`F12`).
-- Native Wayland and login-screen support through `xdg-desktop-portal` (`ScreenCast` and `RemoteDesktop`) with persistent restore tokens so the desktop does not ask for permission on every reboot. When no graphical session is active (such as a lock screen or physical TTY), it can fall back to direct DRM/KMS framebuffer capture (`/dev/dri/card*`) and `/dev/uinput` kernel input devices.
-- Interactive PTY terminal providing full shell access (`bash`, `zsh`, `fish`, or PowerShell) rendered natively on Android through a Rust `vt100` terminal state machine with ANSI/256/truecolor support and scrollback history.
-- One-tap quick commands for running pre-authorized commands or scripts defined on the host (`commands.toml`) or added from the mobile app, with execution timeouts and bounded output capture.
-- Sandboxed file manager confined to the host user's home directory (`~`), with in-app image and text previews, downloads to Android `Downloads`, and uploads from the phone with automatic conflict numbering and symlink escape protection.
-- Live system telemetry and power control for monitoring CPU load, RAM, swap, uptime, network throughput per interface, and top processes in real time, plus session lock, suspend, reboot, power off, and local Wake-on-LAN (WoL).
+## Key Capabilities
 
-## Supported platforms
+- **Zero-Config P2P Transport (`iroh`):** NAT hole-punching, encrypted QUIC streams, and `Ed25519` identity verification against a local allowlist (`trusted_peers.json`).
+- **Low-Latency Wayland Screen Streaming (Linux):** Captures monitors through `xdg-desktop-portal` (`ScreenCast`) + PipeWire and encodes H.264 Annex-B via GStreamer (`nvh264enc`, `vah264enc`, `vaapih264enc`, `openh264enc`, or `x264enc`) with `videoscale method=lanczos`, decoded in hardware (`MediaCodec`) on Android.
+- **Wayland Remote Input (Linux):** Pointer movement, clicks, scroll, X11 keysyms, Unicode fallback, and GNOME keyboard layout mapping via `xdg-desktop-portal` (`RemoteDesktop`).
+- **Interactive PTY Terminal:** Cross-platform shell sessions backed by `portable-pty` on the host and `vt100` emulation on Android.
+- **Quick Commands:** Execute pre-configured tasks from `commands.toml` (with a `30s` timeout and `256 KiB` per-stream output cap) or create/delete entries remotely when `commands_edit` is enabled.
+- **Sandboxed Home File Browser:** Browse, preview, download, and upload files up to `2 GiB`, strictly confined to the host user's home directory (`~`) with symlink and traversal guards.
+- **Bilingual Android Client (`arm64-v8a`):** Material 3 UI with instant **PT / EN** language toggle, Dark/Light/System theme selector, 4 control tabs (**Touchpad**, **Terminal**, **Commands**, **Files**), quality presets (`1080p30`, `1080p60`, `720p30`), pinch-to-zoom, RTT latency indicator, and foreground session service.
 
-| Component | Platforms |
-| :--- | :--- |
-| Host daemon (`oraculo-host`) | Linux (Wayland via PipeWire/`xdg-desktop-portal`, DRM/KMS, or X11) and Windows |
-| Mobile client (`Oráculo`) | Android 8.0+ (API 26+, `arm64-v8a`), hardware `MediaCodec` H.264 decoding |
-| Desktop CLI client (`oraculo-cli`) | Linux and Windows (for terminal-to-terminal shell, ping, telemetry, and WoL) |
+---
 
-## Quick start
+## Platform Support
 
-### 1. Install runtime dependencies on the Linux host
-
-For hardware-accelerated H.264 streaming and PipeWire capture on Linux, install the GStreamer plugins for your distribution:
-
-**Debian / Ubuntu:**
-```bash
-sudo apt update
-sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-pipewire
-```
-
-**Fedora:**
-```bash
-sudo dnf install gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good \
-  gstreamer1-plugins-bad-free gstreamer1-plugin-openh264 pipewire-gstreamer
-```
-
-**Arch Linux:**
-```bash
-sudo pacman -S gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
-  gst-plugin-pipewire openh264
-```
-
-### 2. Start the host service
-
-After building or downloading `oraculo-host` and `oraculo-cli`, install them into `~/.local/bin` and enable the user background service:
-
-```bash
-install -Dm755 ./dist/oraculo-host ~/.local/bin/oraculo-host
-install -Dm755 ./dist/oraculo-cli ~/.local/bin/oraculo-cli
-oraculo-host install-service
-```
-
-### 3. Pair your Android phone or secondary computer
-
-Generate a single-use pairing QR code in the host terminal:
-
-```bash
-oraculo-host pair
-```
-
-Open the Oráculo Android app, tap **Novo pareamento**, and scan the QR code displayed in the terminal (or paste the `oraculo://pair?...` URI manually). The pairing token is valid for 5 minutes and burns automatically after first use or after 5 failed attempts.
-
-### 4. Optional: unattended input and pre-login screen capture on Linux
-
-In a standard Wayland session, screen capture and remote input work through `xdg-desktop-portal` without elevated privileges. If you also want `/dev/uinput` virtual input and DRM/KMS screen capture on the login/lock screen, add your user to the `input` group and grant `cap_sys_admin` to the host binary:
-
-```bash
-sudo usermod -aG input "$USER"
-sudo setcap cap_sys_admin+ep ~/.local/bin/oraculo-host
-```
-
-## Host CLI reference
-
-```text
-oraculo-host serve                          Run the daemon in the foreground
-oraculo-host pair [--ttl-secs 300]          Generate a single-use pairing QR code and URI
-oraculo-host id                             Print the host EndpointId
-oraculo-host devices                        List paired devices
-oraculo-host revoke <ENDPOINT_ID>           Revoke a paired device immediately
-oraculo-host permissions                    Show current subsystem permissions (settings.toml)
-oraculo-host set-permission <PERM> <on|off> Toggle terminal, files, input, screen, or commands-edit
-oraculo-host wol [--mac AA:BB:CC:DD:EE:FF]  Inspect or set the MAC address advertised for Wake-on-LAN
-oraculo-host commands                       List pre-authorized quick commands (commands.toml)
-oraculo-host install-service                Install and start ~/.config/systemd/user/oraculo-host.service
-oraculo-host uninstall-service              Stop and remove the user systemd service
-oraculo-host service-status                 Show systemd service and DRM/uinput capability status
-```
-
-## Security design
-
-Every connection uses QUIC with TLS 1.3 and mutual Ed25519 endpoint authentication (`iroh`, ALPN `oraculo/p2p/1`). Secret keys (`host.key`, `client.key`), paired peer registries (`trusted_peers.json`), and portal restore tokens are created with `0600` permissions on Unix.
-
-Unpaired peers attempting to open functional streams have their QUIC connection terminated immediately (`401 unpaired`). Revoking a device (`oraculo-host revoke <ID>`) or disabling a subsystem (`oraculo-host set-permission <subsystem> off`) drops active streams in real time without restarting the daemon.
-
-The remote file manager is confined to the canonicalized user home directory (`~`). Path resolution blocks `..` traversal, external symlinks, and access to sensitive paths inside `~`, including `.config/oraculo`, `.local/share/oraculo`, `.ssh`, `.gnupg`, `.local/share/keyrings`, `.config/autostart`, and shell startup files (`.bashrc`, `.bash_profile`, `.profile`, `.zshrc`, `.zprofile`).
-
-## Architecture
-
-The repository is structured as a Rust workspace paired with a native Android application:
-
-| Component | Path | Description |
+| Component | Target | Current Status |
 | :--- | :--- | :--- |
-| `oraculo-proto` | `crates/oraculo-proto` | Wire protocol messages, 4-byte big-endian length-prefixed `postcard` framing (4 MiB max frame), `StreamKind` multiplexing headers, and `oraculo://pair` URI parser. |
-| `oraculo-host` | `crates/oraculo-host` | Desktop daemon (`server.rs`), PipeWire/GStreamer/DRM screen streamer (`screen.rs`), Portal/`uinput`/`enigo` input controller (`input.rs`), `portable-pty` shell (`pty.rs`), and home sandbox (`files.rs`). |
-| `oraculo-cli` | `crates/oraculo-cli` | Desktop command-line client for pairing, RTT measurement, telemetry inspection, remote shell, and command execution. |
-| `oraculo-mobile-core` | `crates/oraculo-mobile-core` | Rust library compiled via `cargo-ndk` and exposed to Kotlin through `uniffi`. Implements the QUIC connection pool, `vt100` terminal parser, H.264 Annex-B frame queue, and Wake-on-LAN sender. |
-| `android` | `android/` | Jetpack Compose (Material 3) Android app with `SurfaceView` + hardware `MediaCodec` H.264 decoding and a persistent foreground session service (`OraculoSessionService`). |
+| **Control, PTY Terminal, Quick Commands, Files** | Linux, macOS, Windows | Cross-platform Rust core |
+| **Screen Streaming & Remote Input Host** | Linux (Wayland + PipeWire + GStreamer) | Supported via `xdg-desktop-portal` |
+| **Screen Streaming & Remote Input Host** | Windows / non-Linux | Stub (`Windows DXGI backend planned`) |
+| **Mobile App (`Oráculo`)** | Android 8.0+ (API 26+, `arm64-v8a`) | Supported |
+| **Terminal CLI (`oraculo-cli`)** | Linux / macOS / Windows | Supported |
 
-## Building from source
+> **Runtime requirement on Linux host:** Screen streaming launches `gst-launch-1.0` with `gdppay`, PipeWire GStreamer plugins, and an H.264 encoder (`nvh264enc`, `vah264enc`, `vaapih264enc`, `openh264enc`, or `x264enc`). Make sure `xdg-desktop-portal` and PipeWire are running in your Wayland session.
 
-The repository includes Podman build scripts that run the Rust compiler, GStreamer development headers, Android SDK, and Android NDK inside reproducible containers while caching dependencies in Podman volumes.
+---
+
+## Workspace Architecture
+
+| Component | Path | Responsibility |
+| :--- | :--- | :--- |
+| **Wire Protocol** | [`crates/oraculo-proto`](crates/oraculo-proto) | `postcard`-framed protocol (`4 MiB` max frame, `128 KiB` file chunks) and stream discriminants (`Pair=1`, `Control=2`, `Terminal=3`, `Input=4`, `Files=5`, `Screen=6`). |
+| **Host Daemon** | [`crates/oraculo-host`](crates/oraculo-host) | QUIC server, single-use QR pairing (`3 min` TTL), peer authorization, portal screen/input, PTY, commands, and file sandbox. |
+| **Mobile Core (FFI)** | [`crates/oraculo-mobile-core`](crates/oraculo-mobile-core) | Pooled QUIC client (`OraculoMobileClient`), `vt100` terminal parser, H.264 frame queue, file transfers, and UniFFI bindings. |
+| **CLI Client** | [`crates/oraculo-cli`](crates/oraculo-cli) | Desktop/terminal client for pairing, pinging, listing/running quick commands, and interactive shells. |
+| **Android App** | [`android/`](android/) | Kotlin + Jetpack Compose client with QR pairing, `SurfaceView` `MediaCodec` player, touchpad, terminal, commands, and files UI. |
+
+---
+
+## Quick Start
+
+### 1. Start the Host Daemon
+
+Start `oraculo-host` and display a pairing QR Code (valid for **3 minutes**):
 
 ```bash
-# Run all workspace unit tests
+oraculo-host serve --pair
+```
+
+While `oraculo-host` is running interactively, press `p` + `Enter` at any time to issue a fresh pairing token.
+
+### 2. Pair a Device
+
+- **Android App:** Tap **Pair new computer** (`Parear novo computador` in PT-BR) and scan the QR Code printed by the host, or paste the `oraculo://pair?...` URI manually.
+- **Desktop CLI (`oraculo-cli`):**
+  ```bash
+  oraculo-cli pair "<PASTE_PAIRING_URI>" --name "my-laptop"
+  oraculo-cli ping
+  oraculo-cli shell
+  ```
+
+### 3. Manage Host & Permissions
+
+```bash
+# List trusted peers
+oraculo-host peers
+
+# Revoke a peer (immediately closes its active streams)
+oraculo-host revoke <ENDPOINT_ID>
+
+# Inspect or update subsystem permissions & Wake-on-LAN settings
+oraculo-host permissions --screen true --input true --terminal true
+oraculo-host permissions --files-read true --files-write false --commands-edit false
+
+# Show host EndpointId and config/data file locations
+oraculo-host info
+
+# Pre-authorize monitors via the desktop portal picker for multi-monitor switching
+oraculo-host monitors
+```
+
+All `oraculo-cli` commands (`pair`, `ping`, `commands`, `run`, `shell`) accept `--host <ENDPOINT_ID>` to override the saved default host.
+
+---
+
+## Security Model
+
+- **Mutual Cryptographic Identity:** Peers authenticate using `Ed25519` keys generated by `iroh`; unknown keys can only open `StreamKind::Pair`.
+- **Hardened Pairing:** Tokens expire in **180 seconds**, are single-use, automatically burn after **5 failed attempts**, and verify secrets in constant time.
+- **Instant Revocation & Toggles:** Removing a peer via `oraculo-host revoke` or disabling a capability via `oraculo-host permissions` terminates active streams immediately.
+- **Home Directory Sandbox:** Remote file operations resolve canonical paths inside `~`, block `..` traversal and symlink escapes, and deny access to `.config/oraculo`, `.local/share/oraculo`, `appdata/roaming/oraculo`, `appdata/local/oraculo`, `.ssh`, `.gnupg`, `.local/share/keyrings`, `.config/autostart`, and shell startup files (`.bashrc`, `.bash_profile`, `.profile`, `.zshrc`, `.zprofile`).
+- **Private Storage:** Host/client key material (`host.key`, `trusted_peers.json`, `remote_desktop_token`, `screencast_token`, `client.key`) is written atomically with Unix mode `0600`.
+
+See [`.github/SECURITY.md`](.github/SECURITY.md) for vulnerability reporting guidelines.
+
+---
+
+## Building from Source
+
+Builds use Podman containers (`Containerfile` and `Containerfile.android`) with cached volumes for Rust (`edition = "2024"`), Android SDK 35 (`minSdk 26`), NDK, and UniFFI bindings:
+
+```bash
+# Check workspace compilation
+./scripts/build.sh check
+
+# Run workspace unit tests (oraculo-proto, oraculo-host, oraculo-mobile-core)
 ./scripts/build.sh test
 
-# Compile optimized desktop binaries into ./dist/oraculo-host and ./dist/oraculo-cli
+# Build optimized desktop binaries into ./dist/oraculo-host and ./dist/oraculo-cli
 ./scripts/build.sh release
 
-# Cross-compile liboraculo_mobile_core.so (arm64-v8a), generate UniFFI Kotlin bindings, and build ./dist/oraculo-debug.apk
+# Cross-compile arm64-v8a core, regenerate UniFFI bindings, and build ./dist/oraculo-debug.apk
 ./scripts/build-android.sh debug
 ```
 
-If you prefer building the desktop binaries directly on the host without Podman, run `cargo build --release --workspace` with Rust 1.85+ (`edition = "2024"`).
+---
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](licenses/LICENSE) ([Third-Party Notices](licenses/NOTICE)).
+Licensed under the **Apache License, Version 2.0**. See [`licenses/LICENSE`](licenses/LICENSE) and [`licenses/NOTICE`](licenses/NOTICE) for details and third-party notices.
