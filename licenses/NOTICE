@@ -1,0 +1,26 @@
+Oraculo-Desk
+Copyright 2026 marcos-ce (https://github.com/marcos-ce/Oraculo-Desk)
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this project except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+-------------------------------------------------------------------------------
+Third-Party Notices
+-------------------------------------------------------------------------------
+
+This project includes or links against open-source software components:
+
+- Iroh (https://github.com/n0-computer/iroh)
+  Copyright 2025 N0, INC.
+  Licensed under the Apache License, Version 2.0 or the MIT License.
+
+- Mozilla UniFFI (https://github.com/mozilla/uniffi-rs)
+  Copyright Mozilla Foundation.
+  Licensed under the Mozilla Public License, Version 2.0 (MPL-2.0).
+
+- GStreamer (https://gstreamer.freedesktop.org/)
+  Licensed under the GNU Lesser General Public License, Version 2.1+ (LGPL-2.1-or-later),
+  invoked dynamically as a host subprocess on Linux.
