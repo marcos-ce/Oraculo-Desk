@@ -107,6 +107,12 @@ git clone https://github.com/marcos-ce/Oraculo-Desk.git && cd Oraculo-Desk
 ./scripts/build-android.sh debug  # APK Android → ./dist/
 ```
 
+## Contribuindo
+
+O Oráculo nasceu como uma ferramenta pessoal para resolver um problema concreto: controlar um computador Linux pelo celular Android sem depender de conta em nuvem nem abrir portas no roteador. Foi crescendo a partir disso.
+
+Se você encontrar um bug, tiver um caso de uso não coberto ou quiser adicionar suporte a outra plataforma, contribuições são bem-vindas. Abra uma issue para discutir antes de enviar um pull request grande. Para problemas de segurança, siga o [`.github/SECURITY.md`](.github/SECURITY.md).
+
 ## Licença
 
 [Apache License 2.0](LICENSE). Avisos de terceiros e licenças de fontes estão em [`NOTICE`](NOTICE).
