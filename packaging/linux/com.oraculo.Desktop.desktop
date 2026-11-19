@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Oráculo
+Comment=Encrypted remote access, screen sharing, terminal and Wake-on-LAN between Android and your computer
+Comment[pt_BR]=Acesso remoto criptografado, espelhamento de tela, terminal e Wake-on-LAN entre Android e computador
+Exec=oraculo-desktop
+Icon=com.oraculo.Desktop
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=oraculo;remote;android;screen;terminal;wol;
+Keywords[pt_BR]=oraculo;remoto;android;tela;terminal;wol;
+StartupNotify=true
+StartupWMClass=com.oraculo.Desktop
+Actions=Quit;
+
+[Desktop Action Quit]
+Name=Quit Oráculo
+Name[pt_BR]=Encerrar Oráculo
+Exec=oraculo-desktop --quit

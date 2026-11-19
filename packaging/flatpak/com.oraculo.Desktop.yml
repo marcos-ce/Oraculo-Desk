@@ -1,0 +1,24 @@
+app-id: com.oraculo.Desktop
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+command: oraculo-desktop
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --filesystem=home
+  - --talk-name=org.freedesktop.Flatpak
+modules:
+  - name: oraculo-desktop
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 dist/oraculo-desktop /app/bin/oraculo-desktop
+      - install -Dm755 dist/oraculo-host /app/bin/oraculo-host
+      - install -Dm644 packaging/linux/com.oraculo.Desktop.desktop /app/share/applications/com.oraculo.Desktop.desktop
+      - install -Dm644 packaging/linux/com.oraculo.Desktop.svg /app/share/icons/hicolor/scalable/apps/com.oraculo.Desktop.svg
+    sources:
+      - type: dir
+        path: ../..
