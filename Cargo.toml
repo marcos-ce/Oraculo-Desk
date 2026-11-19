@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0-beta.1"
 edition = "2024"
 license = "Apache-2.0"
 description = "P2P remote desktop, PTY terminal, host telemetry, and sandboxed file manager over QUIC (iroh) for Linux (Wayland/X11), Windows, and Android."

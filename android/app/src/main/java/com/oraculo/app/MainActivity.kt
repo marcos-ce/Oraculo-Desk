@@ -2445,5 +2445,5 @@ private fun readAppVersionName(context: Context): String = runCatching {
         @Suppress("DEPRECATION")
         context.packageManager.getPackageInfo(context.packageName, 0)
     }
-    info.versionName?.takeIf { it.isNotBlank() } ?: "0.1.0"
-}.getOrDefault("0.1.0")
+    info.versionName?.takeIf { it.isNotBlank() } ?: "0.2.0-beta.1"
+}.getOrDefault("0.2.0-beta.1")
