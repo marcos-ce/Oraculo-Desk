@@ -88,11 +88,19 @@ Vulnerability reports are handled privately via [`.github/SECURITY.md`](.github/
 
 | Capability | Linux | Windows | macOS | Android | iOS |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| Desktop companion app (`oraculo-desktop`) | ✅ | experimental | — | — | — |
-| Terminal, commands, files, Wake-on-LAN | ✅ | experimental | experimental | ✅ (client) | planned |
-| Screen streaming & remote input | ✅ (Wayland) | planned | planned | ✅ (client) | planned |
+| Desktop companion app (`oraculo-desktop`) | ✅ | in progress | — | — | — |
+| Terminal, commands, files, Wake-on-LAN | ✅ | in progress | experimental | ✅ (client) | planned |
+| Screen streaming & remote input | ✅ (Wayland) | next update | planned | ✅ (client) | planned |
 
+- **Linux desktop environments:** Oráculo uses standard **XDG Desktop Portal** (`ScreenCast` + `RemoteDesktop`) and **PipeWire** for screen streaming and remote input. It has been developed and tested primarily on **GNOME (Wayland / Fedora)** and **Android (`arm64-v8a`)**. Other Wayland desktops implementing both portals (such as **KDE Plasma 6**) should also work, while **X11 sessions** (such as Cinnamon or XFCE on X11) currently support the desktop app, terminal, commands, files, and Wake-on-LAN, without screen streaming or remote input yet.
 - **Locked screen / initial GDM login on Wayland:** inside an unlocked desktop session, screen streaming and input run natively inside the Android app. When the computer is at the GDM sign-in screen or locked behind a password, Wayland restricts portal capture; Oráculo unlocks it through its encrypted local RDP tunnel paired with an Android RDP client (`aFreeRDP` or `Windows App`).
+- **Beta testing note:** this is an active beta release; features outside the primary GNOME Wayland + Android setup (such as KDE Plasma, alternative Wayland compositors, and the ESP32 bridge firmware) have had limited real-world testing so far. Bug reports and compatibility feedback via [Issues](https://github.com/marcos-ce/Oraculo-Desk/issues) are very welcome.
+
+## Upcoming Updates (Roadmap)
+
+- **Full Windows support (next priority):** native Windows screen capture, remote mouse/keyboard input, native packaging, and end-to-end testing on Windows hosts.
+- **Broader Linux desktop compatibility:** testing and fixes across KDE Plasma, wlroots/COSMIC compositors, and optional X11 fallback (Cinnamon, XFCE, MATE).
+- **Future milestones:** built-in RDP unlock viewer on Android and an iOS client sharing the same Rust core.
 
 <details>
 <summary><strong>Advanced usage: Headless host, CLI client, and standalone WoL bridge</strong></summary>

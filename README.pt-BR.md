@@ -88,11 +88,19 @@ Para reportar vulnerabilidades de forma privada, consulte [`.github/SECURITY.md`
 
 | Recurso | Linux | Windows | macOS | Android | iOS |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| Aplicativo Desktop (`oraculo-desktop`) | ✅ | experimental | — | — | — |
-| Terminal, comandos, arquivos, Wake-on-LAN | ✅ | experimental | experimental | ✅ (cliente) | planejado |
-| Transmissão de tela e controle remoto | ✅ (Wayland) | planejado | planejado | ✅ (cliente) | planejado |
+| Aplicativo Desktop (`oraculo-desktop`) | ✅ | em desenvolvimento | — | — | — |
+| Terminal, comandos, arquivos, Wake-on-LAN | ✅ | em desenvolvimento | experimental | ✅ (cliente) | planejado |
+| Transmissão de tela e controle remoto | ✅ (Wayland) | próximas atualizações | planejado | ✅ (cliente) | planejado |
 
+- **Ambientes gráficos no Linux:** a transmissão de tela e o controle de mouse/teclado usam os padrões **XDG Desktop Portal** (`ScreenCast` + `RemoteDesktop`) e **PipeWire**. O desenvolvimento e os testes principais foram feitos em **GNOME (Wayland / Fedora)** e **Android (`arm64-v8a`)**. Outros ambientes Wayland que implementam ambos os portais (como **KDE Plasma 6**) também tendem a funcionar; já em **sessões X11** (como Cinnamon ou XFCE em X11), o app desktop, terminal, comandos, arquivos e Wake-on-LAN funcionam, mas ainda não há captura de tela/entrada via X11.
 - **Tela bloqueada / login inicial no Wayland (GDM):** dentro de uma sessão já desbloqueada, o espelhamento de tela e o controle rodam diretamente no app Android. Na tela de login do GDM ou com o sistema bloqueado por senha, o Wayland restringe capturas pelo portal; nesses momentos o desbloqueio acontece pelo túnel RDP criptografado do Oráculo com um cliente RDP no celular (`aFreeRDP` ou `Windows App`).
+- **Nota de beta:** esta é uma versão beta em evolução ativa. Cenários fora do conjunto principal GNOME Wayland + Android (como KDE Plasma, outros compositores Wayland e o firmware ESP32) ainda tiveram cobertura limitada de testes em campo — relatos de compatibilidade e bugs em [Issues](https://github.com/marcos-ce/Oraculo-Desk/issues) são muito bem-vindos.
+
+## Próximas atualizações
+
+- **Suporte completo ao Windows (próxima prioridade):** captura de tela nativa, controle remoto de mouse e teclado, empacotamento e testes ponta a ponta no Windows.
+- **Mais ambientes Linux:** validação dedicada no KDE Plasma, compositores wlroots/COSMIC e eventual suporte a sessões X11 (Cinnamon, XFCE, MATE).
+- **Etapas futuras:** cliente RDP embutido no Android para destravar telas bloqueadas sem app externo e aplicativo iOS compartilhando o mesmo núcleo em Rust.
 
 <details>
 <summary><strong>Uso avançado: modo servidor (headless), cliente CLI e ponte dedicada</strong></summary>
