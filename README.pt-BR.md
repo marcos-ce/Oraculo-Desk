@@ -65,6 +65,7 @@ Placas NVIDIA usam `nvh264enc` quando disponível; nos demais casos, o Oráculo 
     <td align="center"><img src="docs/images/desktop-home-pt.png" alt="App Oráculo no computador listando um dispositivo autorizado" width="440"><br><sub>Dispositivo autorizado no computador</sub></td>
     <td align="center"><img src="docs/images/android-pair.png" alt="App Android sem computadores salvos, com os botões Pair device e Enter pairing code" width="200"><br><sub>Pareamento por QR Code ou código</sub></td>
     <td align="center"><img src="docs/images/android-settings.png" alt="Configurações do app Android: tema, idioma, bloqueio biométrico e modo ponte Wake-on-LAN" width="200"><br><sub>Bloqueio biométrico, tema, idioma, modo ponte WoL</sub></td>
+    <td align="center"><img src="docs/images/android-stream.jpg" alt="App Android transmitindo a tela do computador com touchpad e atalhos de teclado abaixo" width="200"><br><sub>Tela ao vivo com controle por touchpad</sub></td>
   </tr>
 </table>
 

@@ -64,6 +64,7 @@ NVIDIA GPUs use `nvh264enc` when available; otherwise Oráculo falls back to `op
   <tr>
     <td align="center"><img src="docs/images/android-pair.png" alt="Android app with no saved computers, offering Pair device and Enter pairing code" width="240"><br><sub>Pair with a QR Code or code</sub></td>
     <td align="center"><img src="docs/images/android-settings.png" alt="Android settings: theme, language, biometric lock, and Wake-on-LAN bridge mode" width="240"><br><sub>Biometric lock, theme, language, WoL bridge mode</sub></td>
+    <td align="center"><img src="docs/images/android-stream.jpg" alt="Android app streaming the computer screen with a touchpad and keyboard shortcuts below" width="240"><br><sub>Live screen with touchpad control</sub></td>
   </tr>
 </table>
 
