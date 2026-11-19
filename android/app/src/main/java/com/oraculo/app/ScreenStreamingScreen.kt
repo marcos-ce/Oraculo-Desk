@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
 import android.graphics.SurfaceTexture
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import android.view.TextureView
@@ -15,8 +16,13 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculateCentroidSize
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -46,6 +52,7 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardHide
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material3.AlertDialog
@@ -94,6 +101,7 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -140,6 +148,7 @@ import kotlin.math.roundToInt
 private const val TAG_STREAM = "OraculoScreen"
 private const val PREF_SCREEN_PRESET = "screen_preset_v2"
 private const val PREF_SCREEN_TUTORIAL_SEEN = "screen_tutorial_seen_v1"
+private const val PREF_PORTRAIT_TOUCHPAD_HEIGHT_DP = "screen_portrait_touchpad_dp_v1"
 private const val PRESET_VALUE_720P30 = "720p30"
 private const val PRESET_VALUE_1080P30 = "1080p30"
 private const val PRESET_VALUE_1080P60 = "1080p60"
@@ -171,6 +180,11 @@ private fun MobileScreenPreset.nextPreset(): MobileScreenPreset = when (this) {
 internal fun ScreenStreamingScreen(
     client: OraculoMobileClient,
     host: SavedHostInfo,
+    allowScreen: Boolean? = null,
+    allowInput: Boolean? = null,
+    allowRdpTunnel: Boolean = true,
+    connectionRestoredNonce: Int = 0,
+    onOpenRdpTunnel: () -> Unit = {},
     onExit: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -198,12 +212,18 @@ internal fun ScreenStreamingScreen(
     var videoWidth by remember { mutableIntStateOf(0) }
     var videoHeight by remember { mutableIntStateOf(0) }
     var screenRetryNonce by remember { mutableIntStateOf(0) }
+    var screenAutoRetryCount by remember(host.endpointId) { mutableIntStateOf(0) }
+    var pendingScreenDelayMs by remember(host.endpointId) { mutableStateOf(0L) }
     var monitorSwitching by remember { mutableStateOf(false) }
     var showMonitorSetupDialog by remember { mutableStateOf(false) }
     var monitorReauthPending by remember { mutableStateOf(false) }
     var streamNotice by remember { mutableStateOf<String?>(null) }
     var showGestureTutorial by remember {
         mutableStateOf(!prefs.getBoolean(PREF_SCREEN_TUTORIAL_SEEN, false))
+    }
+    var customPortraitTouchpadDp by remember {
+        val saved = prefs.getFloat(PREF_PORTRAIT_TOUCHPAD_HEIGHT_DP, -1f)
+        mutableStateOf(if (saved > 0f) saved else null)
     }
 
     var inputSession by remember { mutableStateOf<MobileInputSession?>(null) }
@@ -255,15 +275,16 @@ internal fun ScreenStreamingScreen(
             inputAutoRetryCount = 0
             pendingInputDelayMs = 0L
         } else {
-            if (inputAutoRetryCount >= 3) {
+            if (inputAutoRetryCount >= 5) {
                 inputSession = null
                 inputConnecting = false
-                inputError = tr("Touchpad encerrado por inatividade.", "Touchpad closed due to inactivity.")
+                inputError = tr("Touchpad desconectado. Toque para reconectar.", "Touchpad disconnected. Tap to reconnect.")
                 keyboardController.releaseAllModifiers(null)
                 return
             }
+            val backoffSchedule = listOf(350L, 900L, 1800L, 3000L, 4500L)
+            pendingInputDelayMs = backoffSchedule[inputAutoRetryCount.coerceAtMost(backoffSchedule.lastIndex)]
             inputAutoRetryCount += 1
-            pendingInputDelayMs = if (inputAutoRetryCount == 1) 250L else 850L
         }
         inputSession = null
         inputError = null
@@ -272,6 +293,144 @@ internal fun ScreenStreamingScreen(
         inputRetryNonce += 1
     }
     triggerInputReconnectRef = ::triggerInputReconnect
+
+    fun triggerScreenReconnect(resetAttempts: Boolean, hint: String) {
+        if (resetAttempts) {
+            screenAutoRetryCount = 0
+            pendingScreenDelayMs = 0L
+        } else {
+            val backoffSchedule = listOf(600L, 1500L, 3000L, 4500L)
+            pendingScreenDelayMs = backoffSchedule[screenAutoRetryCount.coerceAtMost(backoffSchedule.lastIndex)]
+            screenAutoRetryCount += 1
+        }
+        screenSession = null
+        screenError = null
+        screenConnectHint = hint
+        screenRetryNonce += 1
+    }
+
+    LaunchedEffect(screenSession, streamInfo) {
+        val activeSession = screenSession ?: return@LaunchedEffect
+        if (streamInfo == null) return@LaunchedEffect
+        delay(4_000L)
+        if (screenSession === activeSession && activeSession.isAlive()) {
+            screenAutoRetryCount = 0
+        }
+    }
+
+    LaunchedEffect(connectionRestoredNonce) {
+        if (connectionRestoredNonce == 0) return@LaunchedEffect
+        val curScreen = screenSession
+        val curScreenErr = screenError
+        if (
+            allowScreen != false &&
+            (curScreenErr == null || !isPermanentRemoteError(curScreenErr)) &&
+            ((curScreen == null && !screenConnecting) || (curScreen != null && !curScreen.isAlive()))
+        ) {
+            triggerScreenReconnect(
+                resetAttempts = true,
+                hint = tr("Reconectando vídeo...", "Reconnecting video..."),
+            )
+        }
+        val curInput = inputSession
+        val curInputErr = inputError
+        if (
+            allowInput != false &&
+            (curInputErr == null || !isPermanentRemoteError(curInputErr)) &&
+            ((curInput == null && !inputConnecting) || (curInput != null && !curInput.isAlive()))
+        ) {
+            triggerInputReconnect(
+                resetAttempts = true,
+                hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."),
+            )
+        }
+    }
+
+    LaunchedEffect(host.endpointId) {
+        var skipFirst = true
+        OraculoSessionCoordinator.networkChangeNonce.collect {
+            if (skipFirst) {
+                skipFirst = false
+                return@collect
+            }
+            delay(450L)
+            val curScreen = screenSession
+            val curScreenErr = screenError
+            if (
+                allowScreen != false &&
+                (curScreenErr == null || !isPermanentRemoteError(curScreenErr)) &&
+                ((curScreen == null && !screenConnecting) || (curScreen != null && !curScreen.isAlive()))
+            ) {
+                triggerScreenReconnect(
+                    resetAttempts = true,
+                    hint = tr("Reconectando vídeo...", "Reconnecting video..."),
+                )
+            }
+            val curInput = inputSession
+            val curInputErr = inputError
+            if (
+                allowInput != false &&
+                (curInputErr == null || !isPermanentRemoteError(curInputErr)) &&
+                ((curInput == null && !inputConnecting) || (curInput != null && !curInput.isAlive()))
+            ) {
+                triggerInputReconnect(
+                    resetAttempts = true,
+                    hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."),
+                )
+            }
+        }
+    }
+
+    LaunchedEffect(allowInput) {
+        if (allowInput == false) {
+            val prev = inputSession
+            keyboardController.releaseAllModifiers(prev)
+            inputSession = null
+            inputConnecting = false
+            inputAutoRetryCount = 0
+            pendingInputDelayMs = 0L
+            inputError = tr("Mouse e teclado desativados no computador.", "Mouse and keyboard disabled on computer.")
+            if (prev != null) {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        prev.closeSession()
+                        prev.close()
+                    }
+                }
+            }
+        } else if (allowInput == true) {
+            val current = inputSession
+            if ((current == null && !inputConnecting) || (current != null && !current.isAlive())) {
+                triggerInputReconnect(
+                    resetAttempts = true,
+                    hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."),
+                )
+            }
+        }
+    }
+
+    LaunchedEffect(allowScreen) {
+        if (allowScreen == false) {
+            val prev = screenSession
+            screenSession = null
+            screenConnecting = false
+            screenError = tr("Transmissão de tela desativada no computador.", "Screen sharing disabled on computer.")
+            if (prev != null) {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        prev.closeSession()
+                        prev.close()
+                    }
+                }
+            }
+        } else if (allowScreen == true) {
+            val current = screenSession
+            if ((current == null && !screenConnecting) || (current != null && !current.isAlive())) {
+                screenError = null
+                screenRetryNonce += 1
+            }
+        }
+    }
 
     val currentOnExit by rememberUpdatedState(onExit)
 
@@ -370,6 +529,8 @@ internal fun ScreenStreamingScreen(
                     screenError = null
                     screenConnectHint = tr("Reconectando vídeo...", "Reconnecting video...")
                     screenRetryNonce += 1
+                } else if (curScreen != null && curScreen.isAlive()) {
+                    decoder.ensureRenderedOrRequestKeyframe()
                 }
             }
         }
@@ -379,24 +540,35 @@ internal fun ScreenStreamingScreen(
         }
     }
 
+    val currentAllowScreen by rememberUpdatedState(allowScreen)
+
     // Sessão de vídeo H.264 independente do canal de input.
     DisposableEffect(host.endpointId, screenRetryNonce) {
+        if (currentAllowScreen == false) {
+            screenConnecting = false
+            screenError = tr("Transmissão de tela desativada no computador.", "Screen sharing disabled on computer.")
+            return@DisposableEffect onDispose {}
+        }
         var active = true
         var createdScreen: MobileScreenSession? = null
+        val waitScreenMs = maxOf(pendingScreenDelayMs, 50L)
+        pendingScreenDelayMs = 0L
         screenConnecting = true
         screenError = null
         streamInfo = null
         monitorSwitching = false
         monitorReauthPending = false
-        screenConnectHint = tr("Abrindo transmissão da tela...", "Opening screen stream...")
+        if (screenAutoRetryCount == 0) {
+            screenConnectHint = tr("Abrindo transmissão da tela...", "Opening screen stream...")
+        }
         val openingPreset = preset
 
         val hintJob = CoroutineScope(Dispatchers.Main).launch {
             delay(1100)
             if (active && screenConnecting) {
                 screenConnectHint = tr(
-                    "Se aparecer aviso no PC, autorize o compartilhamento de tela",
-                    "If prompted on the PC, authorize screen sharing",
+                    "Se aparecer um pedido no computador, autorize o compartilhamento.",
+                    "If prompted on your computer, allow screen sharing.",
                 )
             }
         }
@@ -443,11 +615,22 @@ internal fun ScreenStreamingScreen(
                 Log.w(TAG_STREAM, "onStreamError: $message")
                 mainHandler.post {
                     if (!active) return@post
-                    screenConnecting = false
                     monitorSwitching = false
                     monitorReauthPending = false
-                    screenSession = null
-                    screenError = message
+                    if (
+                        currentAllowScreen != false &&
+                        !isPermanentRemoteError(message) &&
+                        screenAutoRetryCount < 4
+                    ) {
+                        triggerScreenReconnect(
+                            resetAttempts = false,
+                            hint = tr("Reconectando vídeo...", "Reconnecting video..."),
+                        )
+                    } else {
+                        screenConnecting = false
+                        screenSession = null
+                        screenError = message
+                    }
                 }
             }
 
@@ -455,17 +638,29 @@ internal fun ScreenStreamingScreen(
                 Log.w(TAG_STREAM, "onStreamClosed: $reason")
                 mainHandler.post {
                     if (!active) return@post
-                    screenConnecting = false
                     monitorSwitching = false
                     monitorReauthPending = false
-                    screenSession = null
-                    screenError = reason.ifBlank { tr("Transmissão de tela encerrada.", "Screen stream ended.") }
+                    val msg = reason.ifBlank { tr("Transmissão de tela encerrada.", "Screen stream ended.") }
+                    if (
+                        currentAllowScreen != false &&
+                        !isPermanentRemoteError(msg) &&
+                        screenAutoRetryCount < 4
+                    ) {
+                        triggerScreenReconnect(
+                            resetAttempts = false,
+                            hint = tr("Reconectando vídeo...", "Reconnecting video..."),
+                        )
+                    } else {
+                        screenConnecting = false
+                        screenSession = null
+                        screenError = msg
+                    }
                 }
             }
         }
 
         val openJob = CoroutineScope(Dispatchers.IO).launch {
-            delay(50)
+            delay(waitScreenMs)
             if (!active) return@launch
             Log.i(TAG_STREAM, "openScreen iniciando preset=$openingPreset")
             val result = runCatching { client.openScreen(host.endpointId, openingPreset, observer) }
@@ -488,9 +683,21 @@ internal fun ScreenStreamingScreen(
                     screenSession = session
                 }.onFailure { err ->
                     Log.w(TAG_STREAM, "openScreen falhou", err)
-                    screenConnecting = false
-                    screenSession = null
-                    screenError = formatOraculoError(err)
+                    val msg = formatOraculoError(err)
+                    if (
+                        currentAllowScreen != false &&
+                        !isPermanentRemoteError(msg) &&
+                        screenAutoRetryCount < 4
+                    ) {
+                        triggerScreenReconnect(
+                            resetAttempts = false,
+                            hint = tr("Reconectando vídeo...", "Reconnecting video..."),
+                        )
+                    } else {
+                        screenConnecting = false
+                        screenSession = null
+                        screenError = msg
+                    }
                 }
             }
         }
@@ -520,8 +727,15 @@ internal fun ScreenStreamingScreen(
         }
     }
 
+    val currentAllowInput by rememberUpdatedState(allowInput)
+
     // Canal de input dedicado ao mini-touchpad e teclado enquanto estiver no modo streaming.
     DisposableEffect(host.endpointId, inputRetryNonce) {
+        if (currentAllowInput == false) {
+            inputConnecting = false
+            inputError = tr("Mouse e teclado desativados no computador.", "Mouse and keyboard disabled on computer.")
+            return@DisposableEffect onDispose {}
+        }
         var active = true
         var createdInput: MobileInputSession? = null
         val waitMs = maxOf(pendingInputDelayMs, 110L)
@@ -540,10 +754,17 @@ internal fun ScreenStreamingScreen(
                     if (!active) return@post
                     if (createdInput != null && inputSession === createdInput) {
                         createdInput = null
-                        triggerInputReconnect(
-                            resetAttempts = false,
-                            hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."),
-                        )
+                        if (currentAllowInput == false) {
+                            inputSession = null
+                            inputConnecting = false
+                            inputAutoRetryCount = 0
+                            inputError = tr("Mouse e teclado desativados no computador.", "Mouse and keyboard disabled on computer.")
+                        } else {
+                            triggerInputReconnect(
+                                resetAttempts = false,
+                                hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."),
+                            )
+                        }
                     }
                 }
             }
@@ -572,14 +793,15 @@ internal fun ScreenStreamingScreen(
                     inputSession = session
                 }.onFailure { err ->
                     Log.w(TAG_STREAM, "openInput falhou", err)
-                    if (inputAutoRetryCount in 1 until 3) {
+                    val msg = formatOraculoError(err)
+                    if (!isPermanentRemoteError(msg) && inputAutoRetryCount < 5) {
                         triggerInputReconnect(
                             resetAttempts = false,
                             hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."),
                         )
                     } else {
                         inputConnecting = false
-                        inputError = formatOraculoError(err)
+                        inputError = msg
                     }
                 }
             }
@@ -653,7 +875,7 @@ internal fun ScreenStreamingScreen(
             if (!sent) {
                 mainHandler.post {
                     monitorReauthPending = false
-                    streamNotice = "Sessão indisponível no momento."
+                    streamNotice = tr("Sessão indisponível no momento.", "Session unavailable right now.")
                 }
             }
         }
@@ -802,7 +1024,7 @@ internal fun ScreenStreamingScreen(
         val label = when {
             multi -> "M${index + 1}/$count"
             compact -> "1/$available"
-            else -> "1/$available tel."
+            else -> tr("1/$available tel.", "1/$available disp.")
         }
         StreamToolbarButton(
             onClick = {
@@ -816,7 +1038,7 @@ internal fun ScreenStreamingScreen(
         ) {
             Icon(
                 imageVector = Icons.Default.DesktopWindows,
-                contentDescription = "Alternar monitor",
+                contentDescription = tr("Alternar monitor", "Switch monitor"),
                 tint = if (multi) OraculoColors.OnSecondaryContainer else OraculoColors.OnSurfaceMuted,
                 modifier = Modifier.size(15.dp),
             )
@@ -884,7 +1106,7 @@ internal fun ScreenStreamingScreen(
             ) {
                 Icon(
                     imageVector = if (showKeyboard) Icons.Default.KeyboardHide else Icons.Default.Keyboard,
-                    contentDescription = if (showKeyboard) "Ocultar teclado" else "Mostrar teclado",
+                    contentDescription = if (showKeyboard) tr("Ocultar teclado", "Hide keyboard") else tr("Mostrar teclado", "Show keyboard"),
                     tint = if (showKeyboard) OraculoColors.OnSecondaryContainer else OraculoColors.OnSurface,
                     modifier = Modifier.size(16.dp),
                 )
@@ -909,7 +1131,7 @@ internal fun ScreenStreamingScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.KeyboardHide,
-                    contentDescription = "Ocultar teclado",
+                    contentDescription = tr("Ocultar teclado", "Hide keyboard"),
                     modifier = Modifier.size(18.dp),
                 )
             }
@@ -920,7 +1142,7 @@ internal fun ScreenStreamingScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.Keyboard,
-                    contentDescription = "Mostrar teclado",
+                    contentDescription = tr("Mostrar teclado", "Show keyboard"),
                     tint = OraculoColors.OnSurface,
                     modifier = Modifier.size(18.dp),
                 )
@@ -946,7 +1168,7 @@ internal fun ScreenStreamingScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.ScreenRotation,
-                    contentDescription = "Girar tela",
+                    contentDescription = tr("Girar tela", "Rotate screen"),
                     tint = if (isLandscape) OraculoColors.OnSecondaryContainer else OraculoColors.OnSurface,
                     modifier = Modifier.size(16.dp),
                 )
@@ -971,7 +1193,7 @@ internal fun ScreenStreamingScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.ScreenRotation,
-                    contentDescription = "Girar tela",
+                    contentDescription = tr("Girar tela", "Rotate screen"),
                     modifier = Modifier.size(17.dp),
                 )
             }
@@ -982,7 +1204,7 @@ internal fun ScreenStreamingScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.ScreenRotation,
-                    contentDescription = "Girar tela",
+                    contentDescription = tr("Girar tela", "Rotate screen"),
                     tint = OraculoColors.OnSurface,
                     modifier = Modifier.size(17.dp),
                 )
@@ -1013,7 +1235,7 @@ internal fun ScreenStreamingScreen(
             ) {
                 Icon(
                     imageVector = if (fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                    contentDescription = if (fullscreen) "Sair da tela cheia" else "Tela cheia",
+                    contentDescription = if (fullscreen) tr("Sair da tela cheia", "Exit fullscreen") else tr("Tela cheia", "Fullscreen"),
                     modifier = Modifier.size(18.dp),
                 )
             }
@@ -1028,7 +1250,7 @@ internal fun ScreenStreamingScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.FullscreenExit,
-                    contentDescription = "Sair da tela cheia",
+                    contentDescription = tr("Sair da tela cheia", "Exit fullscreen"),
                     modifier = Modifier.size(18.dp),
                 )
             }
@@ -1039,7 +1261,7 @@ internal fun ScreenStreamingScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.Fullscreen,
-                    contentDescription = "Tela cheia",
+                    contentDescription = tr("Tela cheia", "Fullscreen"),
                     tint = OraculoColors.OnSurface,
                     modifier = Modifier.size(18.dp),
                 )
@@ -1059,7 +1281,7 @@ internal fun ScreenStreamingScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
-                    contentDescription = "Sair do streaming",
+                    contentDescription = tr("Sair da transmissão", "Exit stream"),
                     tint = OraculoColors.Error,
                     modifier = Modifier.size(18.dp),
                 )
@@ -1072,7 +1294,7 @@ internal fun ScreenStreamingScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
-                    contentDescription = "Sair do streaming",
+                    contentDescription = tr("Sair da transmissão", "Exit stream"),
                     tint = OraculoColors.Error,
                     modifier = Modifier.size(17.dp),
                 )
@@ -1157,23 +1379,63 @@ internal fun ScreenStreamingScreen(
                         )
                     }
                     .pointerInput(viewportWidthPx, viewportHeightPx, fittedWidthPx, fittedHeightPx) {
-                        detectTransformGestures { centroid, pan, zoom, _ ->
-                            if (zoomJob != null) {
-                                zoomJob?.cancel()
-                            }
-                            val oldScale = zoomScale
-                            val nextScale = (oldScale * zoom).coerceIn(MIN_ZOOM_SCALE, MAX_ZOOM_SCALE)
-                            if (nextScale <= 1.01f) {
-                                if (oldScale > MIN_ZOOM_SCALE || panOffset != Offset.Zero) {
-                                    resetZoom(animated = false)
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            var pastSlop = false
+                            var totalPan = Offset.Zero
+                            var totalZoom = 1f
+                            val touchSlop = viewConfiguration.touchSlop
+
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                if (event.changes.any { it.isConsumed }) break
+                                val pressed = event.changes.filter { it.pressed }
+                                if (pressed.isEmpty()) break
+
+                                // Em escala 1x com apenas 1 dedo, não intercepta toques para não bloquear toque duplo.
+                                if (pressed.size < 2 && zoomScale <= 1.01f && !pastSlop) {
+                                    continue
                                 }
-                            } else {
-                                val ratio = nextScale / oldScale
-                                val center = Offset(viewportWidthPx / 2f, viewportHeightPx / 2f)
-                                val c = centroid - center
-                                val rawPan = panOffset * ratio + c * (1f - ratio) + pan
-                                zoomScale = nextScale
-                                panOffset = clampPan(rawPan, nextScale)
+
+                                val zoomChange = if (pressed.size >= 2) event.calculateZoom() else 1f
+                                val panChange = event.calculatePan()
+
+                                if (!pastSlop) {
+                                    totalZoom *= zoomChange
+                                    totalPan += panChange
+                                    val centroidSize = event.calculateCentroidSize(useCurrent = false)
+                                    val zoomMotion = kotlin.math.abs(1f - totalZoom) * centroidSize
+                                    val panMotion = totalPan.getDistance()
+                                    if (zoomMotion > touchSlop || (zoomScale > 1.01f && panMotion > touchSlop) || (pressed.size >= 2 && panMotion > touchSlop)) {
+                                        pastSlop = true
+                                    }
+                                }
+
+                                if (pastSlop) {
+                                    val centroid = event.calculateCentroid(useCurrent = false)
+                                    if (zoomChange != 1f || panChange != Offset.Zero) {
+                                        zoomJob?.cancel()
+                                        val oldScale = zoomScale
+                                        val nextScale = (oldScale * zoomChange).coerceIn(MIN_ZOOM_SCALE, MAX_ZOOM_SCALE)
+                                        if (nextScale <= 1.01f) {
+                                            if (oldScale > MIN_ZOOM_SCALE || panOffset != Offset.Zero) {
+                                                resetZoom(animated = false)
+                                            }
+                                        } else {
+                                            val ratio = nextScale / oldScale
+                                            val center = Offset(viewportWidthPx / 2f, viewportHeightPx / 2f)
+                                            val c = if (centroid == Offset.Unspecified) Offset.Zero else centroid - center
+                                            val rawPan = panOffset * ratio + c * (1f - ratio) + panChange
+                                            zoomScale = nextScale
+                                            panOffset = clampPan(rawPan, nextScale)
+                                        }
+                                    }
+                                    event.changes.forEach {
+                                        if (it.positionChanged()) {
+                                            it.consume()
+                                        }
+                                    }
+                                }
                             }
                         }
                     },
@@ -1229,12 +1491,12 @@ internal fun ScreenStreamingScreen(
 
             if (screenConnecting) {
                 Surface(
-                    color = Color(0xD90D1117),
-                    shape = RoundedCornerShape(14.dp),
+                    color = OraculoColors.TerminalBackground.copy(alpha = 0.88f),
+                    shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                     modifier = Modifier
                         .align(Alignment.Center)
                         .padding(horizontal = 24.dp)
-                        .border(1.dp, OraculoColors.Outline, RoundedCornerShape(14.dp)),
+                        .border(1.dp, OraculoColors.TerminalBorder, RoundedCornerShape(OraculoMetrics.CornerMedium)),
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
@@ -1249,18 +1511,18 @@ internal fun ScreenStreamingScreen(
                         Text(
                             text = screenConnectHint,
                             style = MaterialTheme.typography.bodySmall,
-                            color = OraculoColors.OnSurface,
+                            color = OraculoColors.TerminalForeground,
                         )
                     }
                 }
             } else if (screenError != null) {
                 Surface(
-                    color = Color(0xE60D1117),
-                    shape = RoundedCornerShape(16.dp),
+                    color = OraculoColors.Surface.copy(alpha = 0.94f),
+                    shape = RoundedCornerShape(OraculoMetrics.CornerLarge),
                     modifier = Modifier
                         .align(Alignment.Center)
                         .padding(horizontal = 24.dp)
-                        .border(1.dp, OraculoColors.Error.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+                        .border(1.dp, OraculoColors.Error.copy(alpha = 0.5f), RoundedCornerShape(OraculoMetrics.CornerLarge)),
                 ) {
                     Column(
                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
@@ -1293,6 +1555,22 @@ internal fun ScreenStreamingScreen(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(tr("Tentar novamente", "Try again"))
                         }
+                        if (allowRdpTunnel) {
+                            TextButton(
+                                onClick = {
+                                    onExit()
+                                    onOpenRdpTunnel()
+                                },
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(tr("Destravar via login remoto (RDP)", "Unlock via remote login (RDP)"))
+                            }
+                        }
                     }
                 }
             }
@@ -1305,14 +1583,14 @@ internal fun ScreenStreamingScreen(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 Surface(
-                    color = Color(0xE60D1117),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.border(1.dp, OraculoColors.Outline, RoundedCornerShape(12.dp)),
+                    color = OraculoColors.TerminalBackground.copy(alpha = 0.90f),
+                    shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                    modifier = Modifier.border(1.dp, OraculoColors.TerminalBorder, RoundedCornerShape(OraculoMetrics.CornerMedium)),
                 ) {
                     Text(
                         text = streamNotice.orEmpty(),
                         style = MaterialTheme.typography.bodySmall,
-                        color = OraculoColors.OnSurface,
+                        color = OraculoColors.TerminalForeground,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     )
@@ -1370,6 +1648,7 @@ internal fun ScreenStreamingScreen(
             .background(OraculoColors.Background),
     ) {
         val wideSplit = maxWidth > maxHeight
+        val availableWidth = maxWidth
         val availableHeight = maxHeight
         val tightImeHeight = availableHeight < 500.dp
         val showLandscapeKeyboardExtras = showKeyboard && availableHeight >= 300.dp
@@ -1452,10 +1731,11 @@ internal fun ScreenStreamingScreen(
 
                     VerticalDivider(thickness = 1.dp, color = OraculoColors.Outline)
 
+                    val landscapeRailWidth = (availableWidth * 0.31f).coerceIn(244.dp, 296.dp)
                     Surface(
                         color = OraculoColors.SurfaceRecessed,
                         modifier = Modifier
-                            .width(236.dp)
+                            .width(landscapeRailWidth)
                             .fillMaxHeight(),
                     ) {
                         Column(
@@ -1595,20 +1875,119 @@ internal fun ScreenStreamingScreen(
                             .fillMaxWidth(),
                     )
 
+                    val minPortraitPadDp = 136f
+                    val maxPortraitPadDp = (availableHeight.value * 0.48f).coerceIn(220f, 380f)
+                    val defaultPortraitPadDp = (availableHeight.value * 0.30f).coerceIn(196f, 256f)
+                    val resolvedPortraitPadDp = (customPortraitTouchpadDp ?: defaultPortraitPadDp)
+                        .coerceIn(minPortraitPadDp, maxPortraitPadDp)
+                    val resizeDensity = LocalDensity.current
+                    val latestMinPadDp by rememberUpdatedState(minPortraitPadDp)
+                    val latestMaxPadDp by rememberUpdatedState(maxPortraitPadDp)
+                    val latestDefaultPadDp by rememberUpdatedState(defaultPortraitPadDp)
+                    var lastResizeHandleTapMs by remember { mutableStateOf(0L) }
+
                     Surface(color = OraculoColors.SurfaceRecessed) {
                         Column(modifier = Modifier.fillMaxWidth()) {
                             HorizontalDivider(thickness = 1.dp, color = OraculoColors.Outline)
+                            if (!showKeyboard) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(24.dp)
+                                        .pointerInput(Unit) {
+                                            val dragSlopPx = viewConfiguration.touchSlop.coerceAtMost(
+                                                with(resizeDensity) { 6.dp.toPx() },
+                                            )
+                                            awaitEachGesture {
+                                                val down = awaitFirstDown(requireUnconsumed = false)
+                                                val pointerId = down.id
+                                                val downAtMs = SystemClock.uptimeMillis()
+                                                var accumDy = 0f
+                                                var dragging = false
+                                                var cancelled = false
+                                                try {
+                                                    while (true) {
+                                                        val event = awaitPointerEvent()
+                                                        val change = event.changes.firstOrNull { it.id == pointerId }
+                                                            ?: break
+                                                        if (!change.pressed) {
+                                                            if (dragging) change.consume()
+                                                            break
+                                                        }
+                                                        val stepDy = change.position.y - change.previousPosition.y
+                                                        if (!dragging) {
+                                                            accumDy += stepDy
+                                                            if (kotlin.math.abs(accumDy) >= dragSlopPx) {
+                                                                dragging = true
+                                                                change.consume()
+                                                                val deltaDp = with(resizeDensity) { (-accumDy).toDp().value }
+                                                                val current = (customPortraitTouchpadDp ?: latestDefaultPadDp)
+                                                                    .coerceIn(latestMinPadDp, latestMaxPadDp)
+                                                                customPortraitTouchpadDp = (current + deltaDp)
+                                                                    .coerceIn(latestMinPadDp, latestMaxPadDp)
+                                                            }
+                                                        } else if (stepDy != 0f) {
+                                                            change.consume()
+                                                            val deltaDp = with(resizeDensity) { (-stepDy).toDp().value }
+                                                            val current = (customPortraitTouchpadDp ?: latestDefaultPadDp)
+                                                                .coerceIn(latestMinPadDp, latestMaxPadDp)
+                                                            customPortraitTouchpadDp = (current + deltaDp)
+                                                                .coerceIn(latestMinPadDp, latestMaxPadDp)
+                                                        }
+                                                    }
+                                                } catch (ce: kotlinx.coroutines.CancellationException) {
+                                                    cancelled = true
+                                                    throw ce
+                                                } finally {
+                                                    if (dragging) {
+                                                        customPortraitTouchpadDp?.let { savedDp ->
+                                                            prefs.edit()
+                                                                .putFloat(PREF_PORTRAIT_TOUCHPAD_HEIGHT_DP, savedDp)
+                                                                .apply()
+                                                        }
+                                                    }
+                                                }
+                                                if (!dragging && !cancelled) {
+                                                    val upAtMs = SystemClock.uptimeMillis()
+                                                    if (upAtMs - downAtMs < 300L) {
+                                                        if (upAtMs - lastResizeHandleTapMs in 20L..350L) {
+                                                            lastResizeHandleTapMs = 0L
+                                                            customPortraitTouchpadDp = null
+                                                            prefs.edit().remove(PREF_PORTRAIT_TOUCHPAD_HEIGHT_DP).apply()
+                                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                        } else {
+                                                            lastResizeHandleTapMs = upAtMs
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(width = 36.dp, height = 4.dp)
+                                            .clip(RoundedCornerShape(OraculoMetrics.CornerPill))
+                                            .background(OraculoColors.Outline),
+                                    )
+                                }
+                            }
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    .padding(
+                                        start = 10.dp,
+                                        end = 10.dp,
+                                        top = if (showKeyboard) 8.dp else 2.dp,
+                                        bottom = 8.dp,
+                                    ),
                                 verticalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                 if (!showKeyboard || !tightImeHeight) {
                                     MiniTouchpadSurface(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(if (showKeyboard) 72.dp else 124.dp),
+                                            .height(if (showKeyboard) 104.dp else resolvedPortraitPadDp.dp),
                                     )
                                 }
 
@@ -1672,26 +2051,28 @@ internal fun ScreenStreamingScreen(
                 textContentColor = OraculoColors.OnSurfaceMuted,
                 title = {
                     Text(
-                        text = tr("Liberar troca dos $avail monitores", "Enable switching across $avail monitors"),
+                        text = tr("Autorizar $avail monitores", "Authorize $avail monitors"),
                         style = MaterialTheme.typography.titleMedium,
                     )
                 },
                 text = {
-                    Text(
-                        text = tr(
-                            "O PC possui $avail monitores ativos, mas o GNOME só autorizou 1.\n\n" +
-                                "Para alternar direto do celular sem abrir janela no desktop:\n" +
-                                "1. No PC, rode `oraculo-host monitors` (ou abra o seletor agora se estiver na frente dele).\n" +
-                                "2. Clique para marcar TODOS os $avail monitores.\n" +
-                                "3. Deixe \"Lembrar esta seleção\" marcado e clique em Compartilhar.",
-                            "The PC has $avail active monitors, but GNOME only authorized 1.\n\n" +
-                                "To switch directly from your phone without opening a desktop prompt:\n" +
-                                "1. On the PC, run `oraculo-host monitors` (or open the picker now if you are in front of it).\n" +
-                                "2. Select ALL $avail monitors.\n" +
-                                "3. Keep \"Remember this selection\" checked and click Share.",
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        Text(
+                            text = tr(
+                                "Este computador tem $avail monitores ativos, mas apenas 1 está autorizado.\n\n" +
+                                    "Para alternar direto pelo celular:\n" +
+                                    "1. Abra o seletor no computador (ou rode `oraculo-host monitors`).\n" +
+                                    "2. Marque todos os $avail monitores.\n" +
+                                    "3. Deixe \"Lembrar esta seleção\" marcado e clique em Compartilhar.",
+                                "This computer has $avail active monitors, but only 1 is authorized.\n\n" +
+                                    "To switch monitors from your phone:\n" +
+                                    "1. Open the picker on your computer (or run `oraculo-host monitors`).\n" +
+                                    "2. Select all $avail monitors.\n" +
+                                    "3. Keep \"Remember this selection\" checked and click Share.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 },
                 confirmButton = {
                     Button(
@@ -1705,9 +2086,9 @@ internal fun ScreenStreamingScreen(
                     ) {
                         Text(
                             if (monitorReauthPending) {
-                                tr("Aberto no PC...", "Opened on PC...")
+                                tr("Aberto no computador...", "Opened on computer...")
                             } else {
-                                tr("Abrir no PC agora", "Open on PC now")
+                                tr("Abrir no computador", "Open on computer")
                             }
                         )
                     }
@@ -1734,6 +2115,7 @@ private fun ScreenGestureTutorialDialog(
     val touchSurfaceColor = MaterialTheme.colorScheme.surfaceContainerHigh
     val outlineColor = OraculoColors.Outline
     val primaryColor = OraculoColors.Primary
+    val terminalSurfaceColor = OraculoColors.TerminalBackground
     val onSurfaceMuted = OraculoColors.OnSurfaceMuted
     val fingerFillColor = if (isDark) {
         primaryColor.copy(alpha = 0.24f)
@@ -1755,9 +2137,8 @@ private fun ScreenGestureTutorialDialog(
         ) {
             val useSideBySide = maxWidth >= 520.dp
             Surface(
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(OraculoMetrics.CornerSurfaceExpanded),
                 color = OraculoColors.Surface,
-                tonalElevation = 2.dp,
                 border = BorderStroke(1.dp, outlineColor),
                 modifier = Modifier.widthIn(max = if (useSideBySide) 620.dp else 400.dp),
             ) {
@@ -1770,15 +2151,15 @@ private fun ScreenGestureTutorialDialog(
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
-                            text = tr("Gestos no Modo Tela", "Screen Mode Gestures"),
+                            text = tr("Gestos da tela", "Screen gestures"),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = OraculoColors.OnSurface,
                         )
                         Text(
                             text = tr(
-                                "Toques rápidos para rolar e ampliar sem esforço.",
-                                "Quick gestures to scroll and zoom effortlessly.",
+                                "Use dois polegares para rolar e pinça para ampliar.",
+                                "Scroll with two thumbs and pinch to zoom.",
                             ),
                             style = MaterialTheme.typography.bodySmall,
                             color = onSurfaceMuted,
@@ -1787,10 +2168,10 @@ private fun ScreenGestureTutorialDialog(
 
                     val scrollCard: @Composable (Modifier) -> Unit = { cardModifier ->
                         GestureTutorialCard(
-                            title = tr("Scroll com 2 polegares no touch", "2-thumb scroll on touchpad"),
+                            title = tr("Rolar com dois polegares", "Scroll with two thumbs"),
                             description = tr(
-                                "Arraste os dois polegares juntos no touchpad para rolar páginas e listas.",
-                                "Drag both thumbs together on the touchpad to scroll pages and lists.",
+                                "Arraste dois polegares juntos no touchpad para rolar páginas e listas.",
+                                "Drag two thumbs together on the touchpad to scroll pages and lists.",
                             ),
                             containerColor = touchSurfaceColor,
                             borderColor = outlineColor,
@@ -1809,16 +2190,17 @@ private fun ScreenGestureTutorialDialog(
                     }
                     val pinchCard: @Composable (Modifier) -> Unit = { cardModifier ->
                         GestureTutorialCard(
-                            title = tr("Pinça direto na tela para zoom", "Pinch directly on screen to zoom"),
+                            title = tr("Zoom com pinça na tela", "Pinch the screen to zoom"),
                             description = tr(
-                                "Faça pinça no vídeo para dar zoom, arraste para mover e 2 toques ajusta 1x/2.5x.",
-                                "Pinch the video to zoom, drag to pan, and double-tap toggles 1x/2.5x.",
+                                "Faça pinça no vídeo para ampliar, arraste para mover e dê 2 toques para alternar 1x/2,5x.",
+                                "Pinch the video to zoom, drag to pan, and double-tap to toggle 1x/2.5x.",
                             ),
                             containerColor = touchSurfaceColor,
                             borderColor = outlineColor,
                             modifier = cardModifier,
                         ) { canvasModifier ->
                             PinchScreenZoomIllustration(
+                                screenFill = terminalSurfaceColor,
                                 outlineColor = outlineColor,
                                 accentColor = primaryColor,
                                 fingerFill = fingerFillColor,
@@ -1855,6 +2237,7 @@ private fun ScreenGestureTutorialDialog(
                             onClick = onDismiss,
                             colors = oraculoPrimaryButtonColors(),
                             shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                            modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
                         ) {
                             Text(tr("Entendi", "Got it"))
                         }
@@ -1875,7 +2258,7 @@ private fun GestureTutorialCard(
     illustration: @Composable (Modifier) -> Unit,
 ) {
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(OraculoMetrics.CornerLarge),
         color = containerColor,
         border = BorderStroke(1.dp, borderColor),
         modifier = modifier,
@@ -2005,6 +2388,7 @@ private fun TwoThumbsScrollIllustration(
 
 @Composable
 private fun PinchScreenZoomIllustration(
+    screenFill: Color,
     outlineColor: Color,
     accentColor: Color,
     fingerFill: Color,
@@ -2022,7 +2406,7 @@ private fun PinchScreenZoomIllustration(
         val radius = CornerRadius(11.dp.toPx(), 11.dp.toPx())
 
         drawRoundRect(
-            color = Color(0xFF0E141E),
+            color = screenFill,
             topLeft = Offset(left, top),
             size = Size(scrW, scrH),
             cornerRadius = radius,

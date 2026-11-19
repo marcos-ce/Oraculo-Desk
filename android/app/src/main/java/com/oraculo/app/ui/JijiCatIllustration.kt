@@ -11,7 +11,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -223,6 +222,82 @@ private class JijiScenePaths {
     }
 }
 
+private class JijiSceneBrushes(c: JijiMascotPalette) {
+    val dropShadowBrush = Brush.radialGradient(
+        colorStops = arrayOf(
+            0f to c.dropShadowCenter.copy(alpha = c.dropShadowAlphaCenter),
+            0.65f to c.dropShadowMid.copy(alpha = c.dropShadowAlphaMid),
+            1f to Color.Transparent,
+        ),
+        center = Offset.Zero,
+        radius = 265f,
+    )
+    val frameBrush = Brush.linearGradient(
+        colorStops = arrayOf(0f to c.laptopTop, 0.55f to c.laptopMid, 1f to c.laptopBottom),
+        start = Offset(380f, 232f),
+        end = Offset(620f, 392f),
+    )
+    val deckBrush = Brush.linearGradient(
+        colorStops = arrayOf(0f to c.laptopTop, 0.55f to c.laptopMid, 1f to c.laptopBottom),
+        start = Offset(320f, 360f),
+        end = Offset(586f, 448f),
+    )
+    val screenBrush = Brush.linearGradient(
+        colors = listOf(c.screenTop, c.screenBottom),
+        start = Offset(399f, 250f),
+        end = Offset(598f, 372f),
+    )
+    val bodyBrush = Brush.linearGradient(
+        colorStops = arrayOf(0f to c.furTop, 0.45f to c.furMid, 1f to c.furBottom),
+        start = Offset(185f, 215f),
+        end = Offset(282f, 468f),
+    )
+    val headBrush = Brush.linearGradient(
+        colorStops = arrayOf(0f to c.furTop, 0.45f to c.furMid, 1f to c.furBottom),
+        start = Offset(182f, 96f),
+        end = Offset(290f, 222f),
+    )
+    val leftEarBrush = Brush.linearGradient(
+        colorStops = arrayOf(0f to c.furTop, 0.45f to c.furMid, 1f to c.furBottom),
+        start = Offset(168f, 0f),
+        end = Offset(214f, 138f),
+    )
+    val rightEarBrush = Brush.linearGradient(
+        colorStops = arrayOf(0f to c.furTop, 0.45f to c.furMid, 1f to c.furBottom),
+        start = Offset(254f, 0f),
+        end = Offset(300f, 138f),
+    )
+    val earInnerBrushLeft = Brush.linearGradient(
+        colors = listOf(c.earInnerTop, c.earInnerBottom),
+        start = Offset(180f, 26f),
+        end = Offset(180f, 138f),
+    )
+    val earInnerBrushRight = Brush.linearGradient(
+        colors = listOf(c.earInnerTop, c.earInnerBottom),
+        start = Offset(284f, 26f),
+        end = Offset(284f, 138f),
+    )
+
+    val stroke5Round = Stroke(width = 5f, join = StrokeJoin.Round)
+    val stroke4Round = Stroke(width = 4f, join = StrokeJoin.Round)
+    val stroke4 = Stroke(width = 4f)
+    val stroke35Round = Stroke(width = 3.5f, join = StrokeJoin.Round)
+    val stroke35 = Stroke(width = 3.5f)
+    val stroke3Round = Stroke(width = 3f, join = StrokeJoin.Round)
+    val stroke3Cap = Stroke(width = 3f, cap = StrokeCap.Round)
+    val stroke25Round = Stroke(width = 2.5f, join = StrokeJoin.Round)
+    val stroke25Cap = Stroke(width = 2.5f, cap = StrokeCap.Round)
+    val stroke25CapRound = Stroke(width = 2.5f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    val stroke2Cap = Stroke(width = 2.0f, cap = StrokeCap.Round)
+    val stroke16Round = Stroke(width = 1.6f, join = StrokeJoin.Round)
+    val stroke15Round = Stroke(width = 1.5f, join = StrokeJoin.Round)
+    val stroke15 = Stroke(width = 1.5f)
+    val stroke12Round = Stroke(width = 1.2f, join = StrokeJoin.Round)
+    val strokeTail = Stroke(width = 28f, cap = StrokeCap.Round)
+    val strokeTailRim = Stroke(width = 3.5f, cap = StrokeCap.Round)
+    val strokeBodyRim = Stroke(width = 4.5f, cap = StrokeCap.Round)
+}
+
 private data class JijiAnimState(
     val breath: Float,
     val tailSwayDeg: Float,
@@ -243,9 +318,10 @@ fun JijiCatIllustration(
 ) {
     val colors = if (OraculoColors.IsDark) DarkJijiPalette else LightJijiPalette
     val paths = remember { JijiScenePaths() }
+    val brushes = remember(colors) { JijiSceneBrushes(colors) }
 
     val transition = rememberInfiniteTransition(label = "jijiMascot")
-    val breath by transition.animateFloat(
+    val breathState = transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -254,7 +330,7 @@ fun JijiCatIllustration(
         ),
         label = "breath",
     )
-    val tailRad by transition.animateFloat(
+    val tailRadState = transition.animateFloat(
         initialValue = 0f,
         targetValue = (2.0 * PI).toFloat(),
         animationSpec = infiniteRepeatable(
@@ -263,7 +339,7 @@ fun JijiCatIllustration(
         ),
         label = "tail",
     )
-    val expressT by transition.animateFloat(
+    val expressTState = transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -273,55 +349,59 @@ fun JijiCatIllustration(
         label = "expression",
     )
 
-    val tailWave = sin(tailRad.toDouble()).toFloat()
-    val blink = 1f - 0.94f * (
-        smoothPulse(expressT, start = 0.24f, peak = 0.268f, end = 0.305f) +
-            smoothPulse(expressT, start = 0.32f, peak = 0.342f, end = 0.372f) * 0.85f
-        ).coerceIn(0f, 1f)
-    val earTwitch = (
-        smoothPulse(expressT, start = 0.62f, peak = 0.642f, end = 0.665f) * -6.5f +
-            smoothPulse(expressT, start = 0.66f, peak = 0.680f, end = 0.705f) * 2.5f
-        )
-
-    val anim = JijiAnimState(
-        breath = breath,
-        tailSwayDeg = tailWave * 4.6f,
-        headOffsetY = -1.6f * breath,
-        headTiltDeg = tailWave * 1.1f,
-        blinkScaleY = blink.coerceAtLeast(0.05f),
-        earTwitchDeg = earTwitch,
-        whiskerFlexDeg = tailWave * 1.1f + breath * 0.8f,
-    )
-
     Canvas(
         modifier = modifier.aspectRatio(SCENE_WIDTH / SCENE_HEIGHT),
     ) {
+        val breath = breathState.value
+        val tailRad = tailRadState.value
+        val expressT = expressTState.value
+
+        val tailWave = sin(tailRad.toDouble()).toFloat()
+        val blink = 1f - 0.94f * (
+            smoothPulse(expressT, start = 0.24f, peak = 0.268f, end = 0.305f) +
+                smoothPulse(expressT, start = 0.32f, peak = 0.342f, end = 0.372f) * 0.85f
+            ).coerceIn(0f, 1f)
+        val earTwitch = (
+            smoothPulse(expressT, start = 0.62f, peak = 0.642f, end = 0.665f) * -6.5f +
+                smoothPulse(expressT, start = 0.66f, peak = 0.680f, end = 0.705f) * 2.5f
+            )
+
+        val anim = JijiAnimState(
+            breath = breath,
+            tailSwayDeg = tailWave * 4.6f,
+            headOffsetY = -1.6f * breath,
+            headTiltDeg = tailWave * 1.1f,
+            blinkScaleY = blink.coerceAtLeast(0.05f),
+            earTwitchDeg = earTwitch,
+            whiskerFlexDeg = tailWave * 1.1f + breath * 0.8f,
+        )
+
         val scale = size.width / SCENE_WIDTH
         withTransform({
             scale(scaleX = scale, scaleY = scale, pivot = Offset.Zero)
         }) {
-            drawFloorShadows(colors, anim.breath)
-            drawBrokenLaptop(colors, paths)
-            drawJijiCat(colors, paths, anim)
+            drawFloorShadows(colors, brushes, anim.breath)
+            drawBrokenLaptop(colors, paths, brushes)
+            drawJijiCat(colors, paths, brushes, anim)
         }
     }
 }
 
 private fun DrawScope.drawFloorShadows(
     c: JijiMascotPalette,
+    b: JijiSceneBrushes,
     breath: Float,
 ) {
-    drawEllipticalRadialGradient(
-        cx = 355f,
-        cy = 468f,
-        rx = 265f,
-        ry = 38f,
-        colorStops = arrayOf(
-            0f to c.dropShadowCenter.copy(alpha = c.dropShadowAlphaCenter),
-            0.65f to c.dropShadowMid.copy(alpha = c.dropShadowAlphaMid),
-            1f to Color.Transparent,
-        ),
-    )
+    withTransform({
+        translate(left = 355f, top = 468f)
+        scale(scaleX = 1f, scaleY = 38f / 265f, pivot = Offset.Zero)
+    }) {
+        drawCircle(
+            brush = b.dropShadowBrush,
+            radius = 265f,
+            center = Offset.Zero,
+        )
+    }
 
     drawCenteredOval(
         color = c.contactShadow,
@@ -349,65 +429,44 @@ private fun DrawScope.drawFloorShadows(
 private fun DrawScope.drawBrokenLaptop(
     c: JijiMascotPalette,
     p: JijiScenePaths,
+    b: JijiSceneBrushes,
 ) {
-    val frameBrush = Brush.linearGradient(
-        colorStops = arrayOf(0f to c.laptopTop, 0.55f to c.laptopMid, 1f to c.laptopBottom),
-        start = Offset(380f, 232f),
-        end = Offset(620f, 392f),
-    )
-    val deckBrush = Brush.linearGradient(
-        colorStops = arrayOf(0f to c.laptopTop, 0.55f to c.laptopMid, 1f to c.laptopBottom),
-        start = Offset(320f, 360f),
-        end = Offset(586f, 448f),
-    )
-    val screenBrush = Brush.linearGradient(
-        colors = listOf(c.screenTop, c.screenBottom),
-        start = Offset(399f, 250f),
-        end = Offset(598f, 372f),
-    )
-
     // Moldura da tela e tela escura com trinca
-    drawPath(p.laptopFrame, brush = frameBrush)
-    drawPath(p.laptopFrame, color = c.laptopStroke, style = Stroke(width = 5f, join = StrokeJoin.Round))
+    drawPath(p.laptopFrame, brush = b.frameBrush)
+    drawPath(p.laptopFrame, color = c.laptopStroke, style = b.stroke5Round)
     if (c.rimLight.alpha > 0f) {
-        drawPath(p.laptopFrame, color = c.rimLight, style = Stroke(width = 1.2f, join = StrokeJoin.Round))
+        drawPath(p.laptopFrame, color = c.rimLight, style = b.stroke12Round)
     }
 
-    drawPath(p.laptopScreen, brush = screenBrush)
-    drawPath(p.laptopScreen, color = c.laptopStroke, style = Stroke(width = 4f, join = StrokeJoin.Round))
+    drawPath(p.laptopScreen, brush = b.screenBrush)
+    drawPath(p.laptopScreen, color = c.laptopStroke, style = b.stroke4Round)
 
-    drawPath(
-        p.crackMain,
-        color = c.crackStroke,
-        style = Stroke(width = 2.5f, cap = StrokeCap.Round, join = StrokeJoin.Round),
-    )
-    drawPath(
-        p.crackBranch,
-        color = c.crackStroke,
-        style = Stroke(width = 2.0f, cap = StrokeCap.Round),
-    )
+    drawPath(p.crackMain, color = c.crackStroke, style = b.stroke25CapRound)
+    drawPath(p.crackBranch, color = c.crackStroke, style = b.stroke2Cap)
 
     // Dobradiças soltas
-    drawRotatedHinge(415f, 352f, 8f, c)
-    drawRotatedHinge(530f, 368f, 14f, c)
+    drawRotatedHinge(415f, 352f, 8f, c, b)
+    drawRotatedHinge(530f, 368f, 14f, c, b)
 
     // Base 3D e teclado
     drawPath(p.baseThickness, color = c.baseEdgeFill)
-    drawPath(p.baseThickness, color = c.laptopStroke, style = Stroke(width = 5f, join = StrokeJoin.Round))
+    drawPath(p.baseThickness, color = c.laptopStroke, style = b.stroke5Round)
 
-    drawPath(p.keyboardDeck, brush = deckBrush)
-    drawPath(p.keyboardDeck, color = c.laptopStroke, style = Stroke(width = 5f, join = StrokeJoin.Round))
+    drawPath(p.keyboardDeck, brush = b.deckBrush)
+    drawPath(p.keyboardDeck, color = c.laptopStroke, style = b.stroke5Round)
     if (c.rimLight.alpha > 0f) {
-        drawPath(p.keyboardDeck, color = c.rimLight, style = Stroke(width = 1.2f, join = StrokeJoin.Round))
+        drawPath(p.keyboardDeck, color = c.rimLight, style = b.stroke12Round)
     }
 
     drawPath(p.keyboardWell, color = c.keyWellFill)
-    drawPath(p.keyboardWell, color = c.laptopStroke, style = Stroke(width = 3.5f, join = StrokeJoin.Round))
+    drawPath(p.keyboardWell, color = c.laptopStroke, style = b.stroke35Round)
 
-    for (row in arrayOf(p.keyRow1, p.keyRow2, p.keyRow3)) {
-        drawPath(row, color = c.keyFill)
-        drawPath(row, color = c.laptopStroke, style = Stroke(width = 2.5f, join = StrokeJoin.Round))
-    }
+    drawPath(p.keyRow1, color = c.keyFill)
+    drawPath(p.keyRow1, color = c.laptopStroke, style = b.stroke25Round)
+    drawPath(p.keyRow2, color = c.keyFill)
+    drawPath(p.keyRow2, color = c.laptopStroke, style = b.stroke25Round)
+    drawPath(p.keyRow3, color = c.keyFill)
+    drawPath(p.keyRow3, color = c.laptopStroke, style = b.stroke25Round)
 
     drawLine(c.laptopStroke, Offset(418f, 374f), Offset(385f, 399f), strokeWidth = 2.5f)
     drawLine(c.laptopStroke, Offset(452f, 378f), Offset(420f, 405f), strokeWidth = 2.5f)
@@ -416,13 +475,13 @@ private fun DrawScope.drawBrokenLaptop(
 
     // Tecla saltada, touchpad e tecla caída
     drawPath(p.poppedKey, color = c.accentKeyFill)
-    drawPath(p.poppedKey, color = c.laptopStroke, style = Stroke(width = 2.5f, join = StrokeJoin.Round))
+    drawPath(p.poppedKey, color = c.laptopStroke, style = b.stroke25Round)
 
     drawPath(p.touchpad, color = c.touchpadFill)
-    drawPath(p.touchpad, color = c.laptopStroke, style = Stroke(width = 3f, join = StrokeJoin.Round))
+    drawPath(p.touchpad, color = c.laptopStroke, style = b.stroke3Round)
 
     drawPath(p.fallenKey, color = c.accentKeyFill)
-    drawPath(p.fallenKey, color = c.laptopStroke, style = Stroke(width = 2.5f, join = StrokeJoin.Round))
+    drawPath(p.fallenKey, color = c.laptopStroke, style = b.stroke25Round)
 }
 
 private fun DrawScope.drawRotatedHinge(
@@ -430,6 +489,7 @@ private fun DrawScope.drawRotatedHinge(
     y: Float,
     degrees: Float,
     c: JijiMascotPalette,
+    b: JijiSceneBrushes,
 ) {
     withTransform({
         rotate(degrees = degrees, pivot = Offset(x, y))
@@ -445,7 +505,7 @@ private fun DrawScope.drawRotatedHinge(
             topLeft = Offset(x, y),
             size = Size(26f, 10f),
             cornerRadius = CornerRadius(3f, 3f),
-            style = Stroke(width = 3.5f),
+            style = b.stroke35,
         )
     }
 }
@@ -453,24 +513,19 @@ private fun DrawScope.drawRotatedHinge(
 private fun DrawScope.drawJijiCat(
     c: JijiMascotPalette,
     p: JijiScenePaths,
+    b: JijiSceneBrushes,
     anim: JijiAnimState,
 ) {
-    val bodyBrush = Brush.linearGradient(
-        colorStops = arrayOf(0f to c.furTop, 0.45f to c.furMid, 1f to c.furBottom),
-        start = Offset(185f, 215f),
-        end = Offset(282f, 468f),
-    )
-
     // Rabo longo com balanço natural
     withTransform({
         rotate(degrees = anim.tailSwayDeg, pivot = Offset(185f, 408f))
     }) {
-        drawPath(p.tail, color = c.tailStroke, style = Stroke(width = 28f, cap = StrokeCap.Round))
+        drawPath(p.tail, color = c.tailStroke, style = b.strokeTail)
         drawPath(
             p.tailRim,
             color = c.tailRim,
             alpha = c.tailRimAlpha,
-            style = Stroke(width = 3.5f, cap = StrokeCap.Round),
+            style = b.strokeTailRim,
         )
     }
 
@@ -478,22 +533,22 @@ private fun DrawScope.drawJijiCat(
     withTransform({
         scale(scaleX = 1f, scaleY = 1f + anim.breath * 0.014f, pivot = Offset(230f, 468f))
     }) {
-        drawPath(p.body, brush = bodyBrush)
-        drawPath(p.body, color = c.furOutline, style = Stroke(width = 4f, join = StrokeJoin.Round))
+        drawPath(p.body, brush = b.bodyBrush)
+        drawPath(p.body, color = c.furOutline, style = b.stroke4Round)
         if (c.rimLight.alpha > 0f) {
-            drawPath(p.body, color = c.rimLight, style = Stroke(width = 1.6f, join = StrokeJoin.Round))
+            drawPath(p.body, color = c.rimLight, style = b.stroke16Round)
         }
         drawPath(
             p.bodyRim,
             color = c.tailRim,
             alpha = if (c.rimLight.alpha > 0f) 0.85f else 0.75f,
-            style = Stroke(width = 4.5f, cap = StrokeCap.Round),
+            style = b.strokeBodyRim,
         )
 
         drawPath(p.pawLeft, color = c.pawFill)
-        drawPath(p.pawLeft, color = c.pawStroke, style = Stroke(width = 2.5f, cap = StrokeCap.Round))
+        drawPath(p.pawLeft, color = c.pawStroke, style = b.stroke25Cap)
         drawPath(p.pawRight, color = c.pawFill)
-        drawPath(p.pawRight, color = c.pawStroke, style = Stroke(width = 2.5f, cap = StrokeCap.Round))
+        drawPath(p.pawRight, color = c.pawStroke, style = b.stroke25Cap)
     }
 
     // Cabeça, orelhas, bigodes e olhos animados em bloco único pelo pescoço
@@ -501,91 +556,67 @@ private fun DrawScope.drawJijiCat(
         translate(top = anim.headOffsetY)
         rotate(degrees = anim.headTiltDeg, pivot = Offset(232f, 220f))
     }) {
-        drawJijiHead(c, p, anim)
+        drawJijiHead(c, p, b, anim)
     }
 }
 
 private fun DrawScope.drawJijiHead(
     c: JijiMascotPalette,
     p: JijiScenePaths,
+    b: JijiSceneBrushes,
     anim: JijiAnimState,
 ) {
-    val headBrush = Brush.linearGradient(
-        colorStops = arrayOf(0f to c.furTop, 0.45f to c.furMid, 1f to c.furBottom),
-        start = Offset(182f, 96f),
-        end = Offset(290f, 222f),
-    )
-    val leftEarBrush = Brush.linearGradient(
-        colorStops = arrayOf(0f to c.furTop, 0.45f to c.furMid, 1f to c.furBottom),
-        start = Offset(168f, 0f),
-        end = Offset(214f, 138f),
-    )
-    val rightEarBrush = Brush.linearGradient(
-        colorStops = arrayOf(0f to c.furTop, 0.45f to c.furMid, 1f to c.furBottom),
-        start = Offset(254f, 0f),
-        end = Offset(300f, 138f),
-    )
-    val earInnerBrushLeft = Brush.linearGradient(
-        colors = listOf(c.earInnerTop, c.earInnerBottom),
-        start = Offset(180f, 26f),
-        end = Offset(180f, 138f),
-    )
-    val earInnerBrushRight = Brush.linearGradient(
-        colors = listOf(c.earInnerTop, c.earInnerBottom),
-        start = Offset(284f, 26f),
-        end = Offset(284f, 138f),
-    )
-
     // Orelha esquerda
     withTransform({ translate(top = 12f) }) {
-        drawPath(p.earLeftOuter, brush = leftEarBrush)
-        drawPath(p.earLeftOuter, color = c.furOutline, style = Stroke(width = 4f, join = StrokeJoin.Round))
+        drawPath(p.earLeftOuter, brush = b.leftEarBrush)
+        drawPath(p.earLeftOuter, color = c.furOutline, style = b.stroke4Round)
         if (c.rimLight.alpha > 0f) {
-            drawPath(p.earLeftOuter, color = c.rimLight, style = Stroke(width = 1.5f, join = StrokeJoin.Round))
+            drawPath(p.earLeftOuter, color = c.rimLight, style = b.stroke15Round)
         }
     }
-    drawPath(p.earLeftInner, brush = earInnerBrushLeft)
+    drawPath(p.earLeftInner, brush = b.earInnerBrushLeft)
 
     // Orelha direita (com tremor pontual)
     withTransform({
         rotate(degrees = anim.earTwitchDeg, pivot = Offset(276f, 132f))
     }) {
         withTransform({ translate(top = 12f) }) {
-            drawPath(p.earRightOuter, brush = rightEarBrush)
-            drawPath(p.earRightOuter, color = c.furOutline, style = Stroke(width = 4f, join = StrokeJoin.Round))
+            drawPath(p.earRightOuter, brush = b.rightEarBrush)
+            drawPath(p.earRightOuter, color = c.furOutline, style = b.stroke4Round)
             if (c.rimLight.alpha > 0f) {
-                drawPath(p.earRightOuter, color = c.rimLight, style = Stroke(width = 1.5f, join = StrokeJoin.Round))
+                drawPath(p.earRightOuter, color = c.rimLight, style = b.stroke15Round)
             }
         }
-        drawPath(p.earRightInner, brush = earInnerBrushRight)
+        drawPath(p.earRightInner, brush = b.earInnerBrushRight)
     }
 
     // Cabeça arredondada
-    drawPath(p.head, brush = headBrush)
-    drawPath(p.head, color = c.furOutline, style = Stroke(width = 4f))
+    drawPath(p.head, brush = b.headBrush)
+    drawPath(p.head, color = c.furOutline, style = b.stroke4)
     if (c.rimLight.alpha > 0f) {
-        drawPath(p.head, color = c.rimLight, style = Stroke(width = 1.5f))
+        drawPath(p.head, color = c.rimLight, style = b.stroke15)
     }
 
     // Bigodes finos com micro-balanço
     withTransform({
         rotate(degrees = -anim.whiskerFlexDeg, pivot = Offset(162f, 174f))
     }) {
-        drawPath(p.whiskerL1, color = c.whiskerStroke, style = Stroke(width = 3f, cap = StrokeCap.Round))
-        drawPath(p.whiskerL2, color = c.whiskerStroke, style = Stroke(width = 3f, cap = StrokeCap.Round))
-        drawPath(p.whiskerL3, color = c.whiskerStroke, style = Stroke(width = 3f, cap = StrokeCap.Round))
+        drawPath(p.whiskerL1, color = c.whiskerStroke, style = b.stroke3Cap)
+        drawPath(p.whiskerL2, color = c.whiskerStroke, style = b.stroke3Cap)
+        drawPath(p.whiskerL3, color = c.whiskerStroke, style = b.stroke3Cap)
     }
     withTransform({
         rotate(degrees = anim.whiskerFlexDeg, pivot = Offset(302f, 174f))
     }) {
-        drawPath(p.whiskerR1, color = c.whiskerStroke, style = Stroke(width = 3f, cap = StrokeCap.Round))
-        drawPath(p.whiskerR2, color = c.whiskerStroke, style = Stroke(width = 3f, cap = StrokeCap.Round))
-        drawPath(p.whiskerR3, color = c.whiskerStroke, style = Stroke(width = 3f, cap = StrokeCap.Round))
+        drawPath(p.whiskerR1, color = c.whiskerStroke, style = b.stroke3Cap)
+        drawPath(p.whiskerR2, color = c.whiskerStroke, style = b.stroke3Cap)
+        drawPath(p.whiskerR3, color = c.whiskerStroke, style = b.stroke3Cap)
     }
 
     // Olhos grandes cinza escuro (sem branco puro), centralizados olhando direto para o usuário
     drawJijiEye(
         c = c,
+        b = b,
         cx = 198f,
         cy = 154f,
         rx = 23f,
@@ -599,6 +630,7 @@ private fun DrawScope.drawJijiHead(
     )
     drawJijiEye(
         c = c,
+        b = b,
         cx = 266f,
         cy = 154f,
         rx = 22f,
@@ -617,6 +649,7 @@ private fun DrawScope.drawJijiHead(
 
 private fun DrawScope.drawJijiEye(
     c: JijiMascotPalette,
+    b: JijiSceneBrushes,
     cx: Float,
     cy: Float,
     rx: Float,
@@ -633,7 +666,12 @@ private fun DrawScope.drawJijiEye(
         scale(scaleX = 1f, scaleY = blinkScaleY, pivot = Offset(cx, cy))
     }) {
         drawCenteredOval(c.eyeIris, cx, cy, rx, ry)
-        drawCenteredOvalStroke(c.furOutline, cx, cy, rx, ry, strokeWidth = 3.5f)
+        drawOval(
+            color = c.furOutline,
+            topLeft = Offset(cx - rx, cy - ry),
+            size = Size(rx * 2f, ry * 2f),
+            style = b.stroke35,
+        )
     }
 
     if (blinkScaleY > 0.25f) {
@@ -643,29 +681,6 @@ private fun DrawScope.drawJijiEye(
             drawCenteredOval(c.eyePupil, pupilCx, pupilCy, 9.5f, 13.5f)
             drawCircle(c.eyeCatchlight, radius = 2.5f, center = Offset(catchCx, catchCy))
         }
-    }
-}
-
-private fun DrawScope.drawEllipticalRadialGradient(
-    cx: Float,
-    cy: Float,
-    rx: Float,
-    ry: Float,
-    vararg colorStops: Pair<Float, Color>,
-) {
-    withTransform({
-        translate(left = cx, top = cy)
-        scale(scaleX = 1f, scaleY = ry / rx, pivot = Offset.Zero)
-    }) {
-        drawCircle(
-            brush = Brush.radialGradient(
-                colorStops = colorStops,
-                center = Offset.Zero,
-                radius = rx,
-            ),
-            radius = rx,
-            center = Offset.Zero,
-        )
     }
 }
 
@@ -682,22 +697,6 @@ private fun DrawScope.drawCenteredOval(
         topLeft = Offset(cx - rx, cy - ry),
         size = Size(rx * 2f, ry * 2f),
         alpha = alpha,
-    )
-}
-
-private fun DrawScope.drawCenteredOvalStroke(
-    color: Color,
-    cx: Float,
-    cy: Float,
-    rx: Float,
-    ry: Float,
-    strokeWidth: Float,
-) {
-    drawOval(
-        color = color,
-        topLeft = Offset(cx - rx, cy - ry),
-        size = Size(rx * 2f, ry * 2f),
-        style = Stroke(width = strokeWidth),
     )
 }
 
