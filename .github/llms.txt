@@ -4,10 +4,10 @@
 
 ## Documentation & Policies
 
-- [English README](../README.md): App-first overview, downloads, desktop/Android setup, security model, and source build guide.
+- [English README](../README.md): Screenshots, downloads, quick start, limitations, and source build guide.
 - [Portuguese README](../README.pt-BR.md): Documentação completa em Português (Brasil).
 - [Wake-on-LAN Guide](../docs/wake-on-lan.md) ([PT-BR](../docs/wake-on-lan.pt-BR.md)): Direct LAN wake, `oraculo-bridge`, Android Bridge Mode, and ESP32/Cardputer firmware.
-- [Agent Guide](AGENTS.md): Workspace boundaries, build commands, and critical invariants for automated tooling.
+- [CLI usage](../docs/cli.md), [Security model](../docs/security.md), [Platform support & roadmap](../docs/compatibility.md) (PT-BR variants use the `.pt-BR.md` suffix).
 - [Security Policy](SECURITY.md): Security model and vulnerability reporting guidance.
 - [License (Apache-2.0)](../LICENSE): License text and [third-party notices](../NOTICE).
 

@@ -32,7 +32,7 @@ private const val SCENE_WIDTH = 650f
 private const val SCENE_HEIGHT = 514f
 
 @Immutable
-private data class JijiMascotPalette(
+private data class CatMascotPalette(
     val dropShadowCenter: Color,
     val dropShadowMid: Color,
     val dropShadowAlphaCenter: Float,
@@ -72,7 +72,7 @@ private data class JijiMascotPalette(
     val touchpadFill: Color,
 )
 
-private val LightJijiPalette = JijiMascotPalette(
+private val LightCatPalette = CatMascotPalette(
     dropShadowCenter = Color(0xFF0C0E12),
     dropShadowMid = Color(0xFF0C0E12),
     dropShadowAlphaCenter = 0.42f,
@@ -112,7 +112,7 @@ private val LightJijiPalette = JijiMascotPalette(
     touchpadFill = Color(0xFF171F2E),
 )
 
-private val DarkJijiPalette = JijiMascotPalette(
+private val DarkCatPalette = CatMascotPalette(
     dropShadowCenter = Color(0xFF06080C),
     dropShadowMid = Color(0xFF080A0F),
     dropShadowAlphaCenter = 0.86f,
@@ -152,7 +152,7 @@ private val DarkJijiPalette = JijiMascotPalette(
     touchpadFill = Color(0xFF171F2E),
 )
 
-private class JijiScenePaths {
+private class CatScenePaths {
     // Notebook quebrado
     val laptopFrame = parse(
         "M 425 232 L 605 248 C 618 250, 624 258, 620 270 L 592 378 " +
@@ -180,7 +180,7 @@ private class JijiScenePaths {
     val touchpad = poly(402f, 408f, 452f, 417f, 440f, 430f, 390f, 421f)
     val fallenKey = poly(365f, 452f, 385f, 455f, 380f, 466f, 360f, 463f)
 
-    // Gatinho preto estilo Ghibli (Jiji)
+    // Gatinho preto do mascote
     val tail = parse("M 185 408 C 125 388, 128 282, 112 225 C 102 190, 78 172, 58 166")
     val tailRim = parse("M 182 396 C 132 376, 134 280, 118 223 C 108 188, 84 170, 62 163")
     val body = parse(
@@ -222,7 +222,7 @@ private class JijiScenePaths {
     }
 }
 
-private class JijiSceneBrushes(c: JijiMascotPalette) {
+private class CatSceneBrushes(c: CatMascotPalette) {
     val dropShadowBrush = Brush.radialGradient(
         colorStops = arrayOf(
             0f to c.dropShadowCenter.copy(alpha = c.dropShadowAlphaCenter),
@@ -298,7 +298,7 @@ private class JijiSceneBrushes(c: JijiMascotPalette) {
     val strokeBodyRim = Stroke(width = 4.5f, cap = StrokeCap.Round)
 }
 
-private data class JijiAnimState(
+private data class CatAnimState(
     val breath: Float,
     val tailSwayDeg: Float,
     val headOffsetY: Float,
@@ -309,18 +309,18 @@ private data class JijiAnimState(
 )
 
 /**
- * Mascote vetorial do estado vazio (gatinho preto estilo Jiji ao lado do notebook)
+ * Mascote vetorial do estado vazio (gatinho preto ao lado do notebook)
  * convertido do SVG com sombras adaptadas e animações fluidas.
  */
 @Composable
-fun JijiCatIllustration(
+fun CatMascotIllustration(
     modifier: Modifier = Modifier,
 ) {
-    val colors = if (OraculoColors.IsDark) DarkJijiPalette else LightJijiPalette
-    val paths = remember { JijiScenePaths() }
-    val brushes = remember(colors) { JijiSceneBrushes(colors) }
+    val colors = if (OraculoColors.IsDark) DarkCatPalette else LightCatPalette
+    val paths = remember { CatScenePaths() }
+    val brushes = remember(colors) { CatSceneBrushes(colors) }
 
-    val transition = rememberInfiniteTransition(label = "jijiMascot")
+    val transition = rememberInfiniteTransition(label = "catMascot")
     val breathState = transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
@@ -366,7 +366,7 @@ fun JijiCatIllustration(
                 smoothPulse(expressT, start = 0.66f, peak = 0.680f, end = 0.705f) * 2.5f
             )
 
-        val anim = JijiAnimState(
+        val anim = CatAnimState(
             breath = breath,
             tailSwayDeg = tailWave * 4.6f,
             headOffsetY = -1.6f * breath,
@@ -382,14 +382,14 @@ fun JijiCatIllustration(
         }) {
             drawFloorShadows(colors, brushes, anim.breath)
             drawBrokenLaptop(colors, paths, brushes)
-            drawJijiCat(colors, paths, brushes, anim)
+            drawCatMascot(colors, paths, brushes, anim)
         }
     }
 }
 
 private fun DrawScope.drawFloorShadows(
-    c: JijiMascotPalette,
-    b: JijiSceneBrushes,
+    c: CatMascotPalette,
+    b: CatSceneBrushes,
     breath: Float,
 ) {
     withTransform({
@@ -427,9 +427,9 @@ private fun DrawScope.drawFloorShadows(
 }
 
 private fun DrawScope.drawBrokenLaptop(
-    c: JijiMascotPalette,
-    p: JijiScenePaths,
-    b: JijiSceneBrushes,
+    c: CatMascotPalette,
+    p: CatScenePaths,
+    b: CatSceneBrushes,
 ) {
     // Moldura da tela e tela escura com trinca
     drawPath(p.laptopFrame, brush = b.frameBrush)
@@ -488,8 +488,8 @@ private fun DrawScope.drawRotatedHinge(
     x: Float,
     y: Float,
     degrees: Float,
-    c: JijiMascotPalette,
-    b: JijiSceneBrushes,
+    c: CatMascotPalette,
+    b: CatSceneBrushes,
 ) {
     withTransform({
         rotate(degrees = degrees, pivot = Offset(x, y))
@@ -510,11 +510,11 @@ private fun DrawScope.drawRotatedHinge(
     }
 }
 
-private fun DrawScope.drawJijiCat(
-    c: JijiMascotPalette,
-    p: JijiScenePaths,
-    b: JijiSceneBrushes,
-    anim: JijiAnimState,
+private fun DrawScope.drawCatMascot(
+    c: CatMascotPalette,
+    p: CatScenePaths,
+    b: CatSceneBrushes,
+    anim: CatAnimState,
 ) {
     // Rabo longo com balanço natural
     withTransform({
@@ -556,15 +556,15 @@ private fun DrawScope.drawJijiCat(
         translate(top = anim.headOffsetY)
         rotate(degrees = anim.headTiltDeg, pivot = Offset(232f, 220f))
     }) {
-        drawJijiHead(c, p, b, anim)
+        drawCatHead(c, p, b, anim)
     }
 }
 
-private fun DrawScope.drawJijiHead(
-    c: JijiMascotPalette,
-    p: JijiScenePaths,
-    b: JijiSceneBrushes,
-    anim: JijiAnimState,
+private fun DrawScope.drawCatHead(
+    c: CatMascotPalette,
+    p: CatScenePaths,
+    b: CatSceneBrushes,
+    anim: CatAnimState,
 ) {
     // Orelha esquerda
     withTransform({ translate(top = 12f) }) {
@@ -614,7 +614,7 @@ private fun DrawScope.drawJijiHead(
     }
 
     // Olhos grandes cinza escuro (sem branco puro), centralizados olhando direto para o usuário
-    drawJijiEye(
+    drawCatEye(
         c = c,
         b = b,
         cx = 198f,
@@ -628,7 +628,7 @@ private fun DrawScope.drawJijiHead(
         catchCy = 147.5f,
         blinkScaleY = anim.blinkScaleY,
     )
-    drawJijiEye(
+    drawCatEye(
         c = c,
         b = b,
         cx = 266f,
@@ -647,9 +647,9 @@ private fun DrawScope.drawJijiHead(
     drawCenteredOval(c.noseFill, 232f, 174f, 5f, 2.5f)
 }
 
-private fun DrawScope.drawJijiEye(
-    c: JijiMascotPalette,
-    b: JijiSceneBrushes,
+private fun DrawScope.drawCatEye(
+    c: CatMascotPalette,
+    b: CatSceneBrushes,
     cx: Float,
     cy: Float,
     rx: Float,

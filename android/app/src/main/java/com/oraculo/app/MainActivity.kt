@@ -128,7 +128,7 @@ import com.oraculo.app.ui.OraculoColors
 import com.oraculo.app.ui.OraculoMetrics
 import com.oraculo.app.ui.OraculoMotion
 import com.oraculo.app.ui.OraculoTheme
-import com.oraculo.app.ui.JijiCatIllustration
+import com.oraculo.app.ui.CatMascotIllustration
 import com.oraculo.app.ui.ThemeMode
 import com.oraculo.app.ui.isOraculoDarkTheme
 import com.oraculo.app.ui.oraculoPrimaryButtonColors
@@ -1644,7 +1644,7 @@ private fun DeviceListScreen(
                             .padding(horizontal = 24.dp, vertical = 32.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        JijiCatIllustration(
+                        CatMascotIllustration(
                             modifier = Modifier
                                 .fillMaxWidth(0.88f)
                                 .widthIn(max = 264.dp),
