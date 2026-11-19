@@ -16,16 +16,16 @@
   <img src="docs/images/hero.png" alt="App Oráculo no computador exibindo o QR Code de pareamento, ao lado do app Android controlando o computador com touchpad e navegando pelos arquivos" width="900">
 </p>
 
-> **Beta (v0.2.0-beta.1).** Host Linux (Wayland) + cliente Android. A transmissão de tela exige sessão Wayland; Windows, macOS e iOS ainda não estão disponíveis. Veja as [Limitações](#limitações).
+> Beta (v0.2.0-beta.1). Host Linux (Wayland) + cliente Android. A transmissão de tela exige sessão Wayland; Windows, macOS e iOS ainda não estão disponíveis. Veja as [Limitações](#limitações).
 
 ## O que faz
 
-- **Tela e entrada:** vídeo H.264 ao vivo com touchpad, toque direto, zoom por pinça e troca de monitor.
-- **Terminal:** shells persistentes em abas que sobrevivem a reconexões.
-- **Comandos rápidos:** atalhos de um toque, editáveis no computador ou no celular.
-- **Arquivos:** navegue, baixe e envie, restritos à sua pasta pessoal.
-- **Desbloqueio de tela:** por túnel RDP local criptografado.
-- **Wake-on-LAN:** na sua rede ou de qualquer lugar por meio de uma [ponte](docs/wake-on-lan.pt-BR.md).
+- Vídeo H.264 ao vivo com touchpad, toque direto, zoom por pinça e troca de monitor.
+- Shells persistentes em abas que sobrevivem a reconexões.
+- Atalhos de um toque, editáveis no computador ou no celular.
+- Navegador de arquivos com download e envio, restrito à sua pasta pessoal.
+- Desbloqueio de tela por túnel RDP local criptografado.
+- Wake-on-LAN na sua rede ou de qualquer lugar por meio de uma [ponte](docs/wake-on-lan.pt-BR.md).
 
 ## Download
 

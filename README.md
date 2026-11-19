@@ -16,16 +16,16 @@
   <img src="docs/images/hero.png" alt="Oráculo desktop app showing the pairing QR Code, next to the Android app controlling the computer with a touchpad and browsing files" width="900">
 </p>
 
-> **Beta (v0.2.0-beta.1).** Linux host (Wayland) + Android client. Screen streaming needs a Wayland session; Windows, macOS, and iOS are not available yet. See [Limitations](#limitations).
+> Beta (v0.2.0-beta.1). Linux host (Wayland) + Android client. Screen streaming needs a Wayland session; Windows, macOS, and iOS are not available yet. See [Limitations](#limitations).
 
 ## What it does
 
-- **Screen & input:** live H.264 screen with touchpad, direct touch, pinch-to-zoom, and multi-monitor switching.
-- **Terminal:** persistent multi-tab shells that survive reconnects.
-- **Quick commands:** one-tap shortcuts, edited on desktop or phone.
-- **Files:** browse, download, and upload, confined to your home directory.
-- **Lock-screen unlock:** over an encrypted local RDP tunnel.
-- **Wake-on-LAN:** on your network, or from anywhere through a [bridge](docs/wake-on-lan.md).
+- Live H.264 screen with touchpad, direct touch, pinch-to-zoom, and multi-monitor switching.
+- Persistent multi-tab shells that survive reconnects.
+- One-tap command shortcuts, edited on desktop or phone.
+- File browser with download and upload, confined to your home directory.
+- Lock-screen unlock over an encrypted local RDP tunnel.
+- Wake-on-LAN on your network, or from anywhere through a [bridge](docs/wake-on-lan.md).
 
 ## Download
 

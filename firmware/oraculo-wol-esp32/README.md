@@ -1,4 +1,4 @@
-# Oráculo Wake-on-LAN Bridge — Cardputer / ESP32
+# Oráculo Wake-on-LAN Bridge: Cardputer / ESP32
 
 [English](#english) · [Português (Brasil)](#português-brasil)
 
@@ -48,10 +48,10 @@ To reopen the setup portal later, hold **BOOT** for 3 seconds (`GPIO 0`, or `GPI
 
 ### Security
 
-- **No factory secrets:** each board generates its own `64`-bit `bridge_id` and `256`-bit `secret` with the hardware TRNG, stored in NVS.
-- **Setup portal never exposes secrets:** the pairing secret and MQTT password are never served over HTTP.
-- **MQTT only over TLS (`8883`)** with X.509 verification after NTP sync. Defaults to `broker.emqx.io`; private brokers and custom Root CA are supported.
-- **Challenge-response with anti-replay:** single-use `nonce` (`25s` TTL), `HMAC-SHA256` encrypted payload (target MACs never travel in plaintext), and authenticated `ACK`.
+- Each board generates its own 64-bit `bridge_id` and 256-bit `secret` with the hardware TRNG, stored in NVS. No factory secrets.
+- The pairing secret and MQTT password are never served over HTTP.
+- MQTT runs only over TLS (`8883`) with X.509 verification after NTP sync. Defaults to `broker.emqx.io`; private brokers and custom Root CA are supported.
+- Challenge-response with anti-replay: single-use `nonce` (`25s` TTL), `HMAC-SHA256` encrypted payload (target MACs never travel in plaintext), and authenticated `ACK`.
 
 ---
 
@@ -99,7 +99,7 @@ Para reabrir o portal depois, segure **BOOT** por 3 segundos (`GPIO 0`, ou `GPIO
 
 ### Segurança
 
-- **Sem chave de fábrica:** cada placa gera seu próprio `bridge_id` (`64 bits`) e `secret` (`256 bits`) com o TRNG de hardware, gravados na NVS.
-- **Portal sem vazamento de segredos:** o segredo de pareamento e a senha MQTT nunca são servidos por HTTP.
-- **MQTT somente sobre TLS (`8883`)** com verificação X.509 após sincronização NTP. Usa `broker.emqx.io` por padrão; suporta brokers privados e Root CA própria.
-- **Challenge-response com anti-replay:** `nonce` de uso único (TTL `25s`), payload cifrado com `HMAC-SHA256` (MACs de destino nunca trafegam em claro) e `ACK` autenticado.
+- Cada placa gera seu próprio `bridge_id` (`64 bits`) e `secret` (`256 bits`) com o TRNG de hardware, gravados na NVS. Sem chaves de fábrica.
+- O segredo de pareamento e a senha MQTT nunca são servidos por HTTP.
+- MQTT roda somente sobre TLS (`8883`) com verificação X.509 após sincronização NTP. Usa `broker.emqx.io` por padrão; suporta brokers privados e Root CA própria.
+- Challenge-response com anti-replay: `nonce` de uso único (TTL `25s`), payload cifrado com `HMAC-SHA256` (MACs de destino nunca trafegam em claro) e `ACK` autenticado.
