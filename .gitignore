@@ -18,7 +18,6 @@ local.properties
 .env.*
 .DS_Store
 
-# Agent tooling (local only)
 /.agents/
 /AGENTS.md
 /.github/AGENTS.md
