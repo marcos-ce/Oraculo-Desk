@@ -3,8 +3,10 @@ resolver = "2"
 members = [
     "crates/oraculo-proto",
     "crates/oraculo-host",
+    "crates/oraculo-bridge",
     "crates/oraculo-cli",
     "crates/oraculo-mobile-core",
+    "crates/oraculo-desktop",
 ]
 
 [workspace.package]
@@ -18,6 +20,7 @@ categories = ["network-programming", "multimedia::video", "command-line-utilitie
 
 [workspace.dependencies]
 anyhow = "1"
+blake3 = "1.8"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
 directories = "6"

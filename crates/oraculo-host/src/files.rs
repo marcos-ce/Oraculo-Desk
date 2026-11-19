@@ -305,16 +305,16 @@ async fn handle_upload(
         .await
         .with_context(|| format!("Falha ao criar arquivo temporário em {}", target_dir.display()))?;
 
-    write_frame(
-        send,
-        &FileHostMsg::UploadReady {
-            resolved_name: resolved_name.clone(),
-        },
-    )
-    .await?;
-
     let mut written: u64 = 0;
     let stream_res: Result<()> = async {
+        write_frame(
+            send,
+            &FileHostMsg::UploadReady {
+                resolved_name: resolved_name.clone(),
+            },
+        )
+        .await?;
+
         loop {
             let msg_opt = tokio::select! {
                 biased;
@@ -404,7 +404,7 @@ fn verify_upload_destination_before_rename(
 
     if let Ok(existing) = fs::symlink_metadata(final_target) {
         if existing.file_type().is_symlink() || existing.is_dir() {
-            bail!("Destino não pode ser sobrescrevido: diretório ou symlink detectado");
+            bail!("Destino não pode ser sobrescrito: diretório ou symlink detectado");
         }
         if !overwrite {
             bail!("Conflito detectado: o arquivo de destino foi criado durante o upload");
@@ -458,13 +458,20 @@ fn is_protected_rel_str(rel_path: &str) -> bool {
     let lower = trimmed.to_ascii_lowercase();
     const PROTECTED_PREFIXES: &[&str] = &[
         ".config/oraculo",
+        ".config/oraculo-bridge",
+        ".config/oraculo-cli",
         ".local/share/oraculo",
+        ".local/share/oraculo-bridge",
+        ".local/share/oraculo-cli",
         "appdata/roaming/oraculo",
         "appdata/local/oraculo",
         ".ssh",
         ".gnupg",
         ".local/share/keyrings",
         ".config/autostart",
+        ".config/systemd/user",
+        ".config/environment.d",
+        ".config/fish",
     ];
     for prefix in PROTECTED_PREFIXES {
         if lower == *prefix || lower.starts_with(&format!("{prefix}/")) {
@@ -473,7 +480,14 @@ fn is_protected_rel_str(rel_path: &str) -> bool {
     }
     matches!(
         lower.as_str(),
-        ".bashrc" | ".bash_profile" | ".profile" | ".zshrc" | ".zprofile"
+        ".bashrc"
+            | ".bash_profile"
+            | ".bash_login"
+            | ".bash_logout"
+            | ".profile"
+            | ".zshrc"
+            | ".zprofile"
+            | ".zshenv"
     )
 }
 
@@ -730,6 +744,13 @@ mod tests {
         assert!(resolve_existing_in_home(&canon_home, ".config/oraculo/host.key", false).is_err());
         assert!(resolve_existing_in_home(&canon_home, ".ssh/id_ed25519", false).is_err());
         assert!(resolve_existing_in_home(&canon_home, ".bashrc", false).is_err());
+        assert!(is_protected_rel_str(".local/share/oraculo-bridge/bridge.key"));
+        assert!(is_protected_rel_str(".local/share/oraculo-cli/client.key"));
+        assert!(is_protected_rel_str(".config/systemd/user/evil.service"));
+        assert!(is_protected_rel_str(".config/environment.d/99-env.conf"));
+        assert!(is_protected_rel_str(".config/fish/config.fish"));
+        assert!(is_protected_rel_str(".zshenv"));
+        assert!(is_protected_rel_str(".bash_login"));
 
         let listing = list_directory(&canon_home, "", true).unwrap();
         let names: Vec<_> = listing.entries.iter().map(|e| e.name.as_str()).collect();

@@ -1,4 +1,9 @@
+pub mod i18n;
+pub mod mcu;
 pub mod pairing;
+pub mod wol;
+
+pub use wol::WolInfo;
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -23,6 +28,7 @@ pub enum StreamKind {
     Input = 4,
     Files = 5,
     Screen = 6,
+    Tunnel = 7,
 }
 
 impl TryFrom<u8> for StreamKind {
@@ -36,9 +42,18 @@ impl TryFrom<u8> for StreamKind {
             4 => Ok(Self::Input),
             5 => Ok(Self::Files),
             6 => Ok(Self::Screen),
+            7 => Ok(Self::Tunnel),
             other => bail!("Tipo de stream desconhecido: {other}"),
         }
     }
+}
+
+/// Papel funcional de um nó pareado no ecossistema Oráculo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum NodeRole {
+    #[default]
+    Computer,
+    WolBridge,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +67,26 @@ pub struct PairResponse {
     pub accepted: bool,
     pub host_name: String,
     pub message: String,
+    pub wol: Option<WolInfo>,
+    pub role: NodeRole,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodePairRequest {
+    pub auth_token: [u8; 32],
+    pub device_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodePairResponse {
+    pub accepted: bool,
+    pub message: String,
+    pub host_endpoint_id: String,
+    pub host_name: String,
+    pub relay_url: Option<String>,
+    pub wol: Option<WolInfo>,
+    pub host_signature: Vec<u8>,
+    pub role: NodeRole,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -89,6 +124,51 @@ pub struct DirectoryListing {
     pub entries: Vec<FileEntryInfo>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostPermissionsWire {
+    pub allow_screen: bool,
+    pub allow_input: bool,
+    pub allow_terminal: bool,
+    pub allow_files_read: bool,
+    pub allow_files_write: bool,
+    pub allow_commands_run: bool,
+    pub allow_commands_edit: bool,
+    pub allow_rdp_tunnel: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TunnelTarget {
+    /// Túnel exclusivo para servidor RDP local no host (`127.0.0.1:<port>`).
+    /// `port == 0` instrui o host a usar a porta configurada em `settings.toml`.
+    LocalRdp { port: u16 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelOpenReq {
+    pub target: TunnelTarget,
+    pub probe_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelOpenResp {
+    pub ok: bool,
+    pub message: String,
+    pub resolved_port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TerminalSessionSummary {
+    pub id: String,
+    pub label: String,
+    pub running: bool,
+    pub exit_code: Option<i32>,
+    pub attached_clients: u32,
+    pub created_unix: u64,
+    pub last_activity_unix: u64,
+    pub cols: u16,
+    pub rows: u16,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ControlRequest {
     Ping,
@@ -105,15 +185,41 @@ pub enum ControlRequest {
         rel_path: String,
         show_hidden: bool,
     },
+    /// Solicita que um nó ponte autenticado na mesma LAN dispare o Magic Packet localmente.
+    RelayWakeOnLan {
+        wol: WolInfo,
+    },
+    /// Assina atualizações em tempo real de permissões e estado do host na conexão ativa.
+    WatchState,
+    /// Lista sessões de terminal persistentes em andamento ou encerradas recentemente no host.
+    ListTerminalSessions,
+    /// Encerra explicitamente uma sessão de terminal persistente pelo identificador.
+    KillTerminalSession { id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ControlResponse {
-    Pong { host_name: String },
+    Pong {
+        host_name: String,
+        wol: Option<WolInfo>,
+        role: NodeRole,
+    },
     Commands(Vec<QuickCommandInfo>),
     CommandResult(CommandOutput),
     DirectoryListing(DirectoryListing),
+    WakeDispatched {
+        packets_sent: u32,
+    },
     Error(String),
+    HostState {
+        host_name: String,
+        wol: Option<WolInfo>,
+        permissions: HostPermissionsWire,
+    },
+    TerminalSessions(Vec<TerminalSessionSummary>),
+    TerminalSessionClosed {
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +263,21 @@ pub enum FileClientMsg {
 pub struct TerminalInit {
     pub cols: u16,
     pub rows: u16,
+    pub persistent: bool,
+    pub session_id: Option<String>,
+    pub label: Option<String>,
+}
+
+impl TerminalInit {
+    pub fn ephemeral(cols: u16, rows: u16) -> Self {
+        Self {
+            cols,
+            rows,
+            persistent: false,
+            session_id: None,
+            label: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +288,12 @@ pub enum TerminalClientMsg {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TerminalHostMsg {
+    Ready {
+        session_id: String,
+        label: String,
+        persistent: bool,
+        reconnected: bool,
+    },
     Output(Vec<u8>),
     Exit(i32),
     Error(String),
@@ -614,5 +741,155 @@ mod tests {
             read_frame::<_, ScreenHostMsg>(&mut hrx).await.unwrap().unwrap(),
             ScreenHostMsg::Notice("ok".into())
         );
+
+        let sample_wol = WolInfo {
+            macs: vec!["AA:BB:CC:DD:EE:01".into(), "AA:BB:CC:DD:EE:02".into()],
+            broadcast: Some("192.168.18.255".into()),
+        };
+        let (mut ptx, mut prx) = tokio::io::duplex(2048);
+        write_frame(
+            &mut ptx,
+            &PairResponse {
+                accepted: true,
+                host_name: "mr".into(),
+                message: "ok".into(),
+                wol: Some(sample_wol.clone()),
+                role: NodeRole::Computer,
+            },
+        )
+        .await
+        .unwrap();
+        write_frame(
+            &mut ptx,
+            &ControlResponse::Pong {
+                host_name: "mr".into(),
+                wol: Some(sample_wol.clone()),
+                role: NodeRole::WolBridge,
+            },
+        )
+        .await
+        .unwrap();
+        drop(ptx);
+
+        let pair_out: PairResponse = read_frame(&mut prx).await.unwrap().unwrap();
+        assert_eq!(pair_out.wol, Some(sample_wol.clone()));
+        assert_eq!(pair_out.role, NodeRole::Computer);
+        let pong_out: ControlResponse = read_frame(&mut prx).await.unwrap().unwrap();
+        assert!(matches!(
+            pong_out,
+            ControlResponse::Pong { host_name, wol, role }
+                if host_name == "mr" && wol == Some(sample_wol) && role == NodeRole::WolBridge
+        ));
+
+        let (mut stx, mut srx) = tokio::io::duplex(2048);
+        let sample_perms = HostPermissionsWire {
+            allow_screen: true,
+            allow_input: false,
+            allow_terminal: true,
+            allow_files_read: true,
+            allow_files_write: false,
+            allow_commands_run: true,
+            allow_commands_edit: false,
+            allow_rdp_tunnel: true,
+        };
+        write_frame(&mut stx, &ControlRequest::WatchState)
+            .await
+            .unwrap();
+        write_frame(
+            &mut stx,
+            &ControlResponse::HostState {
+                host_name: "mr".into(),
+                wol: None,
+                permissions: sample_perms,
+            },
+        )
+        .await
+        .unwrap();
+        drop(stx);
+        assert!(matches!(
+            read_frame::<_, ControlRequest>(&mut srx).await.unwrap().unwrap(),
+            ControlRequest::WatchState
+        ));
+        assert!(matches!(
+            read_frame::<_, ControlResponse>(&mut srx).await.unwrap().unwrap(),
+            ControlResponse::HostState { permissions, .. } if permissions == sample_perms
+        ));
+
+        let (mut ttx, mut trx) = tokio::io::duplex(1024);
+        let open_req = TunnelOpenReq {
+            target: TunnelTarget::LocalRdp { port: 0 },
+            probe_only: true,
+        };
+        let open_resp = TunnelOpenResp {
+            ok: true,
+            message: "ok".into(),
+            resolved_port: 3389,
+        };
+        write_frame(&mut ttx, &open_req).await.unwrap();
+        write_frame(&mut ttx, &open_resp).await.unwrap();
+        drop(ttx);
+        assert_eq!(
+            read_frame::<_, TunnelOpenReq>(&mut trx).await.unwrap().unwrap(),
+            open_req
+        );
+        assert_eq!(
+            read_frame::<_, TunnelOpenResp>(&mut trx).await.unwrap().unwrap(),
+            open_resp
+        );
+
+        let (mut mtx, mut mrx) = tokio::io::duplex(2048);
+        let init_pers = TerminalInit {
+            cols: 80,
+            rows: 24,
+            persistent: true,
+            session_id: Some("s1".into()),
+            label: Some("Agente".into()),
+        };
+        let ready = TerminalHostMsg::Ready {
+            session_id: "s1".into(),
+            label: "Agente".into(),
+            persistent: true,
+            reconnected: true,
+        };
+        let summary = TerminalSessionSummary {
+            id: "s1".into(),
+            label: "Agente".into(),
+            running: true,
+            exit_code: None,
+            attached_clients: 1,
+            created_unix: 100,
+            last_activity_unix: 105,
+            cols: 80,
+            rows: 24,
+        };
+        write_frame(&mut mtx, &init_pers).await.unwrap();
+        write_frame(&mut mtx, &ready).await.unwrap();
+        write_frame(&mut mtx, &ControlRequest::ListTerminalSessions).await.unwrap();
+        write_frame(&mut mtx, &ControlRequest::KillTerminalSession { id: "s1".into() })
+            .await
+            .unwrap();
+        write_frame(&mut mtx, &ControlResponse::TerminalSessions(vec![summary.clone()]))
+            .await
+            .unwrap();
+        drop(mtx);
+
+        let r_init: TerminalInit = read_frame(&mut mrx).await.unwrap().unwrap();
+        assert!(r_init.persistent && r_init.session_id.as_deref() == Some("s1"));
+        assert!(matches!(
+            read_frame::<_, TerminalHostMsg>(&mut mrx).await.unwrap().unwrap(),
+            TerminalHostMsg::Ready { reconnected: true, persistent: true, .. }
+        ));
+        assert!(matches!(
+            read_frame::<_, ControlRequest>(&mut mrx).await.unwrap().unwrap(),
+            ControlRequest::ListTerminalSessions
+        ));
+        assert!(matches!(
+            read_frame::<_, ControlRequest>(&mut mrx).await.unwrap().unwrap(),
+            ControlRequest::KillTerminalSession { id } if id == "s1"
+        ));
+        assert!(matches!(
+            read_frame::<_, ControlResponse>(&mut mrx).await.unwrap().unwrap(),
+            ControlResponse::TerminalSessions(list) if list == vec![summary]
+        ));
     }
 }

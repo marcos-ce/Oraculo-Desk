@@ -1,4 +1,5 @@
 use crate::config::HostSettings;
+use crate::portal::{PortalCoordinator, PortalVaultPaths};
 use anyhow::Result;
 use iroh::endpoint::{RecvStream, SendStream};
 use oraculo_proto::{
@@ -7,7 +8,8 @@ use oraculo_proto::{
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::watch;
+use std::time::Duration;
+use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
 pub struct InputController {
@@ -16,34 +18,71 @@ pub struct InputController {
 }
 
 impl InputController {
-    pub fn new(token_file: PathBuf) -> Self {
-        Self {
-            #[cfg(target_os = "linux")]
-            backend: linux::WaylandPortalBackend::new(token_file),
-        }
-    }
-
-    pub async fn ensure_ready(&self) -> Result<()> {
+    pub fn with_portal(portal: Arc<PortalCoordinator>) -> Self {
         #[cfg(target_os = "linux")]
         {
-            self.backend.ensure_ready().await
+            Self {
+                backend: linux::WaylandPortalBackend::new(portal),
+            }
         }
         #[cfg(not(target_os = "linux"))]
         {
+            let _ = portal;
+            Self {}
+        }
+    }
+
+    pub fn new(token_file: PathBuf) -> Self {
+        Self::with_portal(Arc::new(PortalCoordinator::new(
+            PortalVaultPaths::standalone_legacy(&token_file),
+        )))
+    }
+
+    pub async fn ensure_ready(&self, allow_screen: bool) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            self.backend.ensure_ready(allow_screen).await
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = allow_screen;
             anyhow::bail!("Controle remoto de mouse/teclado implementado apenas para Linux/Wayland")
         }
     }
 
-    pub async fn dispatch(&self, event: InputEvent) -> Result<()> {
+    pub async fn dispatch(&self, event: InputEvent, allow_screen: bool) -> Result<()> {
         #[cfg(target_os = "linux")]
         {
-            self.backend.dispatch(event).await
+            self.backend.dispatch(event, allow_screen).await
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = event;
+            let _ = (event, allow_screen);
             anyhow::bail!("Plataforma sem suporte de entrada remota")
         }
+    }
+}
+
+async fn wait_until_input_disabled(settings_rx: &mut watch::Receiver<HostSettings>) {
+    loop {
+        if !settings_rx.borrow().allow_input {
+            return;
+        }
+        if settings_rx.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+fn coalesce_input_event(current: &mut InputEvent, next: InputEvent) -> Option<InputEvent> {
+    match (current, next) {
+        (InputEvent::Move { dx, dy }, InputEvent::Move { dx: nx, dy: ny })
+        | (InputEvent::Scroll { dx, dy }, InputEvent::Scroll { dx: nx, dy: ny }) => {
+            *dx += nx;
+            *dy += ny;
+            None
+        }
+        (_, other) => Some(other),
     }
 }
 
@@ -53,6 +92,7 @@ pub async fn handle_input_stream(
     controller: Arc<InputController>,
     mut settings_rx: watch::Receiver<HostSettings>,
 ) -> Result<()> {
+    let _ = send.set_priority(100);
     if !settings_rx.borrow().allow_input {
         let _ = write_frame(
             &mut send,
@@ -63,10 +103,23 @@ pub async fn handle_input_stream(
         )
         .await;
         let _ = send.finish();
+        tokio::time::sleep(Duration::from_millis(60)).await;
         return Ok(());
     }
 
-    match controller.ensure_ready().await {
+    let allow_screen = settings_rx.borrow().allow_screen;
+    let ready_outcome = tokio::select! {
+        biased;
+        _ = wait_until_input_disabled(&mut settings_rx) => {
+            Err(anyhow::anyhow!("Controle de teclado e mouse desativado pelo host"))
+        }
+        _ = send.stopped() => {
+            return Ok(());
+        }
+        res = controller.ensure_ready(allow_screen) => res,
+    };
+
+    match ready_outcome {
         Ok(()) => {
             write_frame(
                 &mut send,
@@ -88,6 +141,7 @@ pub async fn handle_input_stream(
             )
             .await;
             let _ = send.finish();
+            tokio::time::sleep(Duration::from_millis(60)).await;
             return Err(err);
         }
     }
@@ -96,25 +150,57 @@ pub async fn handle_input_stream(
     let mut held_keys: HashSet<RemoteKey> = HashSet::new();
     let mut held_buttons: HashSet<MouseButton> = HashSet::new();
 
-    loop {
-        let event = tokio::select! {
-            biased;
-            changed = settings_rx.changed() => {
-                if changed.is_ok() && !settings_rx.borrow().allow_input {
-                    warn!("Controle de entrada remota desativado pelo host; encerrando sessão");
-                    break;
+    // Desacopla leitura QUIC da injeção D-Bus: em rajadas após oscilações de rede fraca,
+    // múltiplos `Move`/`Scroll` consecutivos são somados em uma única chamada ao portal.
+    let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<InputEvent>();
+    let reader_task = tokio::spawn(async move {
+        loop {
+            match read_frame::<_, InputEvent>(&mut recv).await {
+                Ok(Some(ev)) => {
+                    if ev_tx.send(ev).is_err() {
+                        break;
+                    }
                 }
-                continue;
-            }
-            frame = read_frame::<_, InputEvent>(&mut recv) => match frame {
-                Ok(Some(ev)) => ev,
                 Ok(None) => break,
                 Err(err) => {
                     warn!("Leitura do canal de entrada encerrada: {err:#}");
                     break;
                 }
             }
+        }
+    });
+
+    let mut pending: Option<InputEvent> = None;
+
+    loop {
+        let mut event = match pending.take() {
+            Some(ev) => ev,
+            None => tokio::select! {
+                biased;
+                changed = settings_rx.changed() => {
+                    if changed.is_ok() && !settings_rx.borrow().allow_input {
+                        warn!("Controle de entrada remota desativado pelo host; encerrando sessão");
+                        break;
+                    }
+                    continue;
+                }
+                maybe = ev_rx.recv() => match maybe {
+                    Some(ev) => ev,
+                    None => break,
+                }
+            },
         };
+
+        while let Ok(queued) = ev_rx.try_recv() {
+            if let Some(barrier) = coalesce_input_event(&mut event, queued) {
+                pending = Some(barrier);
+                break;
+            }
+        }
+
+        if matches!(event, InputEvent::Move { dx, dy } | InputEvent::Scroll { dx, dy } if dx == 0.0 && dy == 0.0) {
+            continue;
+        }
 
         match &event {
             InputEvent::KeyState { key, pressed } => {
@@ -134,26 +220,36 @@ pub async fn handle_input_stream(
             _ => {}
         }
 
-        if let Err(err) = controller.dispatch(event).await {
+        let current_allow_screen = settings_rx.borrow().allow_screen;
+        if let Err(err) = controller.dispatch(event, current_allow_screen).await {
             warn!("Erro ao injetar entrada remota: {err:#}");
         }
     }
 
+    reader_task.abort();
+
     // Garante que nenhuma tecla modificadora ou botão do mouse fique preso se a conexão cair.
+    let current_allow_screen = settings_rx.borrow().allow_screen;
     for key in held_keys {
         let _ = controller
-            .dispatch(InputEvent::KeyState {
-                key,
-                pressed: false,
-            })
+            .dispatch(
+                InputEvent::KeyState {
+                    key,
+                    pressed: false,
+                },
+                current_allow_screen,
+            )
             .await;
     }
     for button in held_buttons {
         let _ = controller
-            .dispatch(InputEvent::Button {
-                button,
-                pressed: false,
-            })
+            .dispatch(
+                InputEvent::Button {
+                    button,
+                    pressed: false,
+                },
+                current_allow_screen,
+            )
             .await;
     }
 
@@ -356,70 +452,48 @@ mod linux {
         CharInputPlan, LayoutCapabilities, mouse_button_code, parse_gnome_layout_capabilities,
         plan_char_input, remote_key_to_keysym,
     };
-    use crate::config::write_private_file;
-    use anyhow::{Context, Result};
-    use ashpd::desktop::remote_desktop::{
-        DeviceType, KeyState, NotifyPointerAxisOptions, RemoteDesktop, SelectDevicesOptions,
-    };
-    use ashpd::desktop::{PersistMode, Session};
+    use crate::portal::{ActiveRemoteDesktop, PortalCoordinator};
+    use anyhow::Result;
+    use ashpd::desktop::remote_desktop::{KeyState, NotifyPointerAxisOptions};
     use oraculo_proto::InputEvent;
-    use std::fs;
-    use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
     use tokio::sync::Mutex;
-    use tracing::info;
 
     const CONTROL_L: i32 = 0xffe3;
     const SHIFT_L: i32 = 0xffe1;
     const RETURN_KEY: i32 = 0xff0d;
     const LAYOUT_CACHE_TTL: Duration = Duration::from_secs(2);
 
-    struct PortalState {
-        proxy: RemoteDesktop,
-        session: Session<RemoteDesktop>,
-        layout_cache: Option<(Instant, LayoutCapabilities)>,
-    }
-
     pub struct WaylandPortalBackend {
-        token_file: PathBuf,
-        state: Mutex<Option<PortalState>>,
+        portal: Arc<PortalCoordinator>,
+        layout_cache: Mutex<Option<(Instant, LayoutCapabilities)>>,
     }
 
     impl WaylandPortalBackend {
-        pub fn new(token_file: PathBuf) -> Self {
+        pub fn new(portal: Arc<PortalCoordinator>) -> Self {
             Self {
-                token_file,
-                state: Mutex::new(None),
+                portal,
+                layout_cache: Mutex::new(None),
             }
         }
 
-        pub async fn ensure_ready(&self) -> Result<()> {
-            let mut guard = self.state.lock().await;
-            if guard.is_none() {
-                *guard = Some(self.open_session().await?);
-            }
-            Ok(())
+        pub async fn ensure_ready(&self, allow_screen: bool) -> Result<()> {
+            self.portal.ensure_remote_desktop(allow_screen).await.map(|_| ())
         }
 
-        pub async fn dispatch(&self, event: InputEvent) -> Result<()> {
-            let mut guard = self.state.lock().await;
-            if guard.is_none() {
-                *guard = Some(self.open_session().await?);
-            }
-
-            if let Some(active) = guard.as_mut() {
-                if Self::send_event(active, &event).await.is_ok() {
-                    return Ok(());
-                }
+        pub async fn dispatch(&self, event: InputEvent, allow_screen: bool) -> Result<()> {
+            let rd = self.portal.ensure_remote_desktop(allow_screen).await?;
+            if Self::send_event(&rd, &self.layout_cache, &event).await.is_ok() {
+                return Ok(());
             }
 
             // Sessão pode ter expirado (ex.: bloqueio de tela); reabre uma vez e reenvia.
-            *guard = Some(self.open_session().await?);
-            let active = guard.as_mut().context("Sessão portal indisponível")?;
-            Self::send_event(active, &event).await
+            let reopened = self.portal.reopen_remote_desktop(allow_screen, &rd).await?;
+            Self::send_event(&reopened, &self.layout_cache, &event).await
         }
 
-        async fn set_key(active: &PortalState, sym: i32, state: KeyState) -> Result<()> {
+        async fn set_key(active: &ActiveRemoteDesktop, sym: i32, state: KeyState) -> Result<()> {
             active
                 .proxy
                 .notify_keyboard_keysym(&active.session, sym, state, Default::default())
@@ -427,12 +501,12 @@ mod linux {
             Ok(())
         }
 
-        async fn tap_keysym(active: &PortalState, sym: i32) -> Result<()> {
+        async fn tap_keysym(active: &ActiveRemoteDesktop, sym: i32) -> Result<()> {
             Self::set_key(active, sym, KeyState::Pressed).await?;
             Self::set_key(active, sym, KeyState::Released).await
         }
 
-        async fn type_unicode_hex(active: &PortalState, codepoint: u32) -> Result<()> {
+        async fn type_unicode_hex(active: &ActiveRemoteDesktop, codepoint: u32) -> Result<()> {
             Self::set_key(active, CONTROL_L, KeyState::Pressed).await?;
             Self::set_key(active, SHIFT_L, KeyState::Pressed).await?;
             Self::tap_keysym(active, b'u' as i32).await?;
@@ -445,19 +519,28 @@ mod linux {
             Self::tap_keysym(active, RETURN_KEY).await
         }
 
-        async fn active_layout_capabilities(active: &mut PortalState) -> LayoutCapabilities {
-            if let Some((cached_at, caps)) = active.layout_cache {
-                if cached_at.elapsed() < LAYOUT_CACHE_TTL {
-                    return caps;
+        async fn active_layout_capabilities(
+            layout_cache: &Mutex<Option<(Instant, LayoutCapabilities)>>,
+        ) -> LayoutCapabilities {
+            {
+                let guard = layout_cache.lock().await;
+                if let Some((cached_at, caps)) = *guard {
+                    if cached_at.elapsed() < LAYOUT_CACHE_TTL {
+                        return caps;
+                    }
                 }
             }
 
             let caps = detect_gnome_layout_capabilities().await;
-            active.layout_cache = Some((Instant::now(), caps));
+            *layout_cache.lock().await = Some((Instant::now(), caps));
             caps
         }
 
-        async fn send_event(active: &mut PortalState, event: &InputEvent) -> Result<()> {
+        async fn send_event(
+            active: &ActiveRemoteDesktop,
+            layout_cache: &Mutex<Option<(Instant, LayoutCapabilities)>>,
+            event: &InputEvent,
+        ) -> Result<()> {
             match event {
                 InputEvent::Move { dx, dy } => {
                     active
@@ -528,7 +611,7 @@ mod linux {
                 }
                 InputEvent::Text(text) => {
                     let caps = if text.bytes().any(|b| b >= 0x80) {
-                        Self::active_layout_capabilities(active).await
+                        Self::active_layout_capabilities(layout_cache).await
                     } else {
                         LayoutCapabilities::default()
                     };
@@ -549,55 +632,6 @@ mod linux {
                 }
             }
             Ok(())
-        }
-
-        async fn open_session(&self) -> Result<PortalState> {
-            let proxy = RemoteDesktop::new()
-                .await
-                .context("Portal RemoteDesktop indisponível na sessão gráfica")?;
-            let session = proxy
-                .create_session(Default::default())
-                .await
-                .context("Falha ao criar sessão RemoteDesktop")?;
-
-            let saved_token = fs::read_to_string(&self.token_file)
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty());
-
-            let options = SelectDevicesOptions::default()
-                .set_devices(DeviceType::KEYBOARD | DeviceType::POINTER)
-                .set_persist_mode(PersistMode::ExplicitlyRevoked)
-                .set_restore_token(saved_token.as_deref());
-
-            proxy
-                .select_devices(&session, options)
-                .await
-                .context("Falha ao selecionar teclado/mouse no portal")?;
-
-            let response = proxy
-                .start(&session, None, Default::default())
-                .await
-                .context("Falha ao iniciar permissão de controle remoto")?
-                .response()
-                .context("Permissão de controle remoto cancelada ou negada no PC")?;
-
-            if let Some(token) = response.restore_token() {
-                if let Err(err) = write_private_file(&self.token_file, token.as_bytes()) {
-                    tracing::warn!("Não foi possível salvar restore_token: {err:#}");
-                }
-            }
-
-            info!(
-                devices = ?response.devices(),
-                "Portal RemoteDesktop autorizado pelo sistema"
-            );
-
-            Ok(PortalState {
-                proxy,
-                session,
-                layout_cache: None,
-            })
         }
     }
 
@@ -656,5 +690,30 @@ mod tests {
         assert!(!us.has_ccedilla);
         assert_eq!(plan_char_input('ã', us), CharInputPlan::UnicodeHex(0x00e3));
         assert_eq!(plan_char_input('ç', us), CharInputPlan::UnicodeHex(0x00e7));
+    }
+
+    #[test]
+    fn coalesces_consecutive_move_and_scroll_without_reordering_clicks() {
+        let mut cur = InputEvent::Move { dx: 3.5, dy: -1.0 };
+        assert!(coalesce_input_event(&mut cur, InputEvent::Move { dx: 2.5, dy: 4.0 }).is_none());
+        assert!(matches!(cur, InputEvent::Move { dx, dy } if (dx - 6.0).abs() < 1e-9 && (dy - 3.0).abs() < 1e-9));
+
+        let barrier = coalesce_input_event(
+            &mut cur,
+            InputEvent::Click {
+                button: MouseButton::Left,
+            },
+        );
+        assert!(matches!(
+            barrier,
+            Some(InputEvent::Click {
+                button: MouseButton::Left
+            })
+        ));
+        assert!(matches!(cur, InputEvent::Move { dx, dy } if (dx - 6.0).abs() < 1e-9 && (dy - 3.0).abs() < 1e-9));
+
+        let mut scroll = InputEvent::Scroll { dx: 0.0, dy: 1.5 };
+        assert!(coalesce_input_event(&mut scroll, InputEvent::Scroll { dx: -0.5, dy: 2.5 }).is_none());
+        assert!(matches!(scroll, InputEvent::Scroll { dx, dy } if (dx - (-0.5)).abs() < 1e-9 && (dy - 4.0).abs() < 1e-9));
     }
 }

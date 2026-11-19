@@ -44,14 +44,15 @@ case "$MODE" in
     debug)
         echo "==> Compilando binários (debug) no container..."
         mkdir -p "$ROOT_DIR/dist"
-        run_in_container "cargo build --workspace && install -m 755 /target-cache/debug/oraculo-host /target-cache/debug/oraculo-cli /work/dist/"
+        run_in_container "cargo build --workspace && install -m 755 /target-cache/debug/oraculo-host /target-cache/debug/oraculo-bridge /target-cache/debug/oraculo-cli /target-cache/debug/oraculo-desktop /work/dist/"
         echo "==> Binários prontos em ./dist/"
         ;;
     release)
         echo "==> Compilando binários (release) no container..."
         mkdir -p "$ROOT_DIR/dist"
-        run_in_container "cargo build --release --workspace && install -m 755 /target-cache/release/oraculo-host /target-cache/release/oraculo-cli /work/dist/"
-        echo "==> Binários prontos em ./dist/"
+        run_in_container "cargo build --release --workspace && install -m 755 /target-cache/release/oraculo-host /target-cache/release/oraculo-bridge /target-cache/release/oraculo-cli /target-cache/release/oraculo-desktop /work/dist/"
+        (cd "$ROOT_DIR/dist" && sha256sum oraculo-host oraculo-bridge oraculo-cli oraculo-desktop > SHA256SUMS)
+        echo "==> Binários e ./dist/SHA256SUMS prontos em ./dist/"
         ;;
     clean-volumes)
         echo "==> Removendo volumes de cache do Podman..."

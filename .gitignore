@@ -4,6 +4,7 @@
 /android/.kotlin
 /android/local.properties
 local.properties
+/android/build
 /android/app/build
 /android/app/src/main/jniLibs
 /android/app/src/main/java/uniffi
