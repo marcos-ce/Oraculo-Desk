@@ -1,19 +1,23 @@
 # Oráculo (Oraculo-Desk)
 
-> Peer-to-peer remote desktop, interactive PTY terminal, quick commands, and home-sandboxed file browser over `iroh` encrypted QUIC (`ALPN: oraculo/1`), written in Rust (edition 2024) and Kotlin (Jetpack Compose).
+> Peer-to-peer remote desktop, interactive PTY terminal, quick commands, home-sandboxed file manager, encrypted RDP unlock tunnel, and Wake-on-LAN over `iroh` encrypted QUIC (`ALPN: oraculo/1`), written in Rust (edition 2024) and Kotlin (Jetpack Compose).
 
 ## Documentation & Policies
 
-- [English README](../README.md): Architecture overview, platform support matrix, CLI commands, security model, and Podman build workflow.
+- [English README](../README.md): App-first overview, downloads, desktop/Android setup, security model, and source build guide.
 - [Portuguese README](../README.pt-BR.md): Documentação completa em Português (Brasil).
+- [Wake-on-LAN Guide](../docs/wake-on-lan.md) ([PT-BR](../docs/wake-on-lan.pt-BR.md)): Direct LAN wake, `oraculo-bridge`, Android Bridge Mode, and ESP32/Cardputer firmware.
 - [Agent Guide](AGENTS.md): Workspace boundaries, build commands, and critical invariants for automated tooling.
 - [Security Policy](SECURITY.md): Security model and vulnerability reporting guidance.
-- [License (Apache-2.0)](../licenses/LICENSE): License text and [third-party notices](../licenses/NOTICE).
+- [License (Apache-2.0)](../LICENSE): License text and [third-party notices](../NOTICE).
 
-## Workspace Crates
+## Workspace Crates & Apps
 
-- [`crates/oraculo-proto`](../crates/oraculo-proto): Length-prefixed `postcard` protocol (`MAX_FRAME_SIZE = 4 MiB`, `FILE_CHUNK_SIZE = 128 KiB`), `StreamKind` (`Pair=1`, `Control=2`, `Terminal=3`, `Input=4`, `Files=5`, `Screen=6`), and `ControlRequest`/`ControlResponse`.
-- [`crates/oraculo-host`](../crates/oraculo-host): Host daemon (`serve [--pair]`, `peers`, `revoke`, `permissions`, `info`, `monitors`), Linux Wayland `xdg-desktop-portal` ScreenCast (PipeWire + GStreamer H.264) and RemoteDesktop input, `portable-pty` terminal, `commands.toml` runner, and `~` file sandbox.
-- [`crates/oraculo-cli`](../crates/oraculo-cli): Terminal client (`pair`, `ping`, `commands`, `run`, `shell`).
-- [`crates/oraculo-mobile-core`](../crates/oraculo-mobile-core): UniFFI-exported (`OraculoMobileClient`) QUIC connection pool, `vt100` terminal parser, H.264 NAL normalizer, and file transfer engine for Android `arm64-v8a`.
-- [`android/`](../android/): Jetpack Compose client (`minSdk = 26`, `targetSdk = 35`) with hardware `MediaCodec` video decoder, bilingual `PT`/`EN` UI, `Touchpad`/`Terminal`/`Commands`/`Files` tabs, and foreground session service.
+- [`crates/oraculo-proto`](../crates/oraculo-proto): Length-prefixed `postcard` protocol (`MAX_FRAME_SIZE = 4 MiB`, `FILE_CHUNK_SIZE = 128 KiB`), `StreamKind` (`Pair=1`, `Control=2`, `Terminal=3`, `Input=4`, `Files=5`, `Screen=6`, `Tunnel=7`), `wol`, `mcu` (ESP32 MQTT/HMAC), and `i18n` (PT/EN).
+- [`crates/oraculo-host`](../crates/oraculo-host): Host daemon (`serve [--pair]`, `peers`, `revoke`, `permissions`, `info`, `monitors`, `wol`), Linux Wayland `xdg-desktop-portal` ScreenCast (PipeWire + GStreamer H.264) and RemoteDesktop input, persistent `portable-pty` terminal sessions, `commands.toml` runner, local RDP tunnel, firewall check, and `~` file sandbox.
+- [`crates/oraculo-desktop`](../crates/oraculo-desktop): Native Material Design 3 desktop companion app (GTK4/libadwaita + WebKitGTK via `dlopen` on Linux, Edge WebView2 on Windows) with QR pairing, live permissions, monitor authorization, RDP firewall isolation, quick commands, Wake-on-LAN, and autostart.
+- [`crates/oraculo-bridge`](../crates/oraculo-bridge): Standalone Wake-on-LAN P2P relay daemon for always-on Linux/Raspberry Pi/Termux nodes.
+- [`crates/oraculo-cli`](../crates/oraculo-cli): Terminal client (`pair`, `ping`, `commands`, `run`, `shell`, `wake`).
+- [`crates/oraculo-mobile-core`](../crates/oraculo-mobile-core): UniFFI-exported (`OraculoMobileClient`) QUIC connection pool, `vt100` terminal parser, H.264 NAL normalizer, file transfer engine, local RDP tunnel, Wake-on-LAN bridge, and `set_language` localization for Android `arm64-v8a`.
+- [`android/`](../android/): Jetpack Compose Material 3 client (`minSdk = 26`, `targetSdk = 35`) with process-scoped `OraculoApplication`, Android 15 `OraculoSessionService`, biometric lock, hardware `MediaCodec` video decoder, bilingual `PT`/`EN` UI, Wake-on-LAN dialog, and `Touchpad`/`Terminal`/`Commands`/`Files` tabs.
+- [`firmware/oraculo-wol-esp32/`](../firmware/oraculo-wol-esp32/): Optional Arduino/ESP32 & M5Stack Cardputer Wake-on-LAN bridge with WPA2 SoftAP setup and MQTT/TLS `HMAC-SHA256` challenge-response.

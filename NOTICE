@@ -1,4 +1,4 @@
-Oraculo-Desk
+Oráculo (Oraculo-Desk)
 Copyright 2026 marcos-ce (https://github.com/marcos-ce/Oraculo-Desk)
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,7 +11,13 @@ You may obtain a copy of the License at
 Third-Party Notices
 -------------------------------------------------------------------------------
 
-This project includes or links against open-source software components:
+This project includes, embeds, or dynamically interacts with open-source
+software and font components:
+
+- Google Sans & Google Sans Code (https://github.com/googlefonts/googlesans)
+  Copyright 2025 The Google Sans Project Authors.
+  Licensed under the SIL Open Font License, Version 1.1 (OFL-1.1).
+  Full font license text is included in crates/oraculo-desktop/assets/OFL.txt.
 
 - Iroh (https://github.com/n0-computer/iroh)
   Copyright 2025 N0, INC.
@@ -21,6 +27,17 @@ This project includes or links against open-source software components:
   Copyright Mozilla Foundation.
   Licensed under the Mozilla Public License, Version 2.0 (MPL-2.0).
 
+- AndroidX, Jetpack Compose, CameraX & Material Components for Android
+  Copyright The Android Open Source Project.
+  Licensed under the Apache License, Version 2.0.
+
+- ZXing (https://github.com/zxing/zxing)
+  Licensed under the Apache License, Version 2.0.
+
 - GStreamer (https://gstreamer.freedesktop.org/)
   Licensed under the GNU Lesser General Public License, Version 2.1+ (LGPL-2.1-or-later),
   invoked dynamically as a host subprocess on Linux.
+
+- GTK, libadwaita & WebKitGTK (https://www.gtk.org/ / https://webkitgtk.org/)
+  Licensed under the GNU Lesser General Public License (LGPL-2.1-or-later),
+  loaded dynamically at runtime via dlopen on Linux.
