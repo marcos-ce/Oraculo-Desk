@@ -17,16 +17,32 @@ async fn read_bounded<R: tokio::io::AsyncRead + Unpin>(mut reader: R, limit: usi
         // Drena o restante sem alocar em memória para não bloquear o processo filho em SIGPIPE.
         let mut sink = tokio::io::sink();
         let _ = tokio::io::copy(&mut reader, &mut sink).await;
-        buf.extend_from_slice(b"\n[... saida truncada pelo limite de seguranca de 256 KB ...]");
+        buf.extend_from_slice(
+            b"\n[... sa\xc3\xadda truncada pelo limite de seguran\xc3\xa7a de 256 KB ...]",
+        );
     }
     buf
 }
 
 /// Executa um comando rápido pré-autorizado em `commands.toml` com timeout seguro e limite de memória.
 pub async fn run_quick_command(spec: &QuickCommandSpec) -> CommandOutput {
-    let mut cmd = Command::new(&spec.program);
-    cmd.args(&spec.args)
-        .stdin(Stdio::null())
+    #[cfg(target_os = "linux")]
+    let mut cmd = if std::path::Path::new("/.flatpak-info").exists() {
+        let mut c = Command::new("flatpak-spawn");
+        c.arg("--host").arg(&spec.program).args(&spec.args);
+        c
+    } else {
+        let mut c = Command::new(&spec.program);
+        c.args(&spec.args);
+        c
+    };
+    #[cfg(not(target_os = "linux"))]
+    let mut cmd = {
+        let mut c = Command::new(&spec.program);
+        c.args(&spec.args);
+        c
+    };
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);

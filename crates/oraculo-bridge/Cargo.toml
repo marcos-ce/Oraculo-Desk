@@ -1,0 +1,22 @@
+[package]
+name = "oraculo-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Lightweight standalone Wake-on-LAN P2P bridge daemon for Oráculo."
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+directories.workspace = true
+hex.workspace = true
+iroh.workspace = true
+oraculo-proto = { path = "../oraculo-proto" }
+qrcode.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -1,4 +1,5 @@
 use crate::config::HostSettings;
+use crate::portal::{PortalCoordinator, PortalVaultPaths};
 use anyhow::{Result, bail};
 use iroh::endpoint::{RecvStream, SendStream};
 use oraculo_proto::{
@@ -17,6 +18,56 @@ use tracing::{debug, info, warn};
 const MAX_PENDING_DELTAS: usize = 6;
 const MAX_GDP_PAYLOAD_SIZE: usize = 8 * 1024 * 1024;
 const KEYFRAME_RESTART_COOLDOWN: Duration = Duration::from_secs(4);
+// Mantém o replay abaixo de MAX_CLIENT_VIDEO_DELTAS (6) para não acionar descarte no cliente.
+const MAX_HOST_GOP_REPLAY_FRAMES: usize = 5;
+const MAX_HOST_GOP_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Default)]
+struct HostGopCache {
+    frames: Vec<EncodedAccessUnit>,
+    total_bytes: usize,
+    complete: bool,
+}
+
+impl HostGopCache {
+    fn record(&mut self, au: &EncodedAccessUnit) {
+        if au.keyframe {
+            self.frames.clear();
+            self.total_bytes = au.data.len();
+            self.frames.push(au.clone());
+            self.complete = true;
+        } else if !self.frames.is_empty() && self.complete {
+            if self.frames.len() < MAX_HOST_GOP_REPLAY_FRAMES
+                && self.total_bytes + au.data.len() <= MAX_HOST_GOP_BYTES
+            {
+                self.total_bytes += au.data.len();
+                self.frames.push(au.clone());
+            } else {
+                self.complete = false;
+                self.frames.truncate(1);
+                self.total_bytes = self.frames[0].data.len();
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.frames.clear();
+        self.total_bytes = 0;
+        self.complete = false;
+    }
+
+    fn is_complete(&self) -> bool {
+        self.complete && !self.frames.is_empty()
+    }
+
+    fn frames(&self) -> &[EncodedAccessUnit] {
+        &self.frames
+    }
+
+    fn keyframe(&self) -> Option<&EncodedAccessUnit> {
+        self.frames.first()
+    }
+}
 
 /// Unidade de acesso H.264 Annex-B pronta para transmissão no stream de vídeo.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,14 +206,20 @@ pub struct ScreenController {
 }
 
 impl ScreenController {
-    pub fn new(token_file: PathBuf) -> Self {
+    pub fn with_portal(portal: Arc<PortalCoordinator>) -> Self {
         let (active_tx, _rx) = watch::channel(0u64);
         Self {
-            backend: PlatformScreenBackend::new(token_file),
+            backend: PlatformScreenBackend::with_portal(portal),
             generation: AtomicU64::new(0),
             active_tx,
             session_lock: Mutex::new(()),
         }
+    }
+
+    pub fn new(token_file: PathBuf) -> Self {
+        Self::with_portal(Arc::new(PortalCoordinator::new(
+            PortalVaultPaths::standalone_legacy(&token_file),
+        )))
     }
 
     fn claim_generation(&self) -> (u64, watch::Receiver<u64>) {
@@ -180,6 +237,35 @@ impl ScreenController {
         let rx = self.active_tx.subscribe();
         (next_gen, rx)
     }
+}
+
+async fn wait_until_screen_disabled(settings_rx: &mut watch::Receiver<HostSettings>) {
+    loop {
+        if !settings_rx.borrow().allow_screen {
+            return;
+        }
+        if settings_rx.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+async fn wait_until_superseded(gen_rx: &mut watch::Receiver<u64>, my_gen: u64) {
+    loop {
+        if *gen_rx.borrow() != my_gen {
+            return;
+        }
+        if gen_rx.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+async fn send_error_and_finish(mut send: SendStream, message: impl Into<String>) {
+    let _ = write_frame(&mut send, &ScreenHostMsg::Error(message.into())).await;
+    let _ = send.finish();
+    // Dá tempo ao transporte QUIC de entregar o frame antes de soltar o SendStream (RESET_STREAM).
+    tokio::time::sleep(Duration::from_millis(80)).await;
 }
 
 async fn send_ready(send: &mut SendStream, info: &NegotiatedStreamInfo) -> Result<()> {
@@ -213,7 +299,17 @@ async fn recv_optional_reauth(
 
 /// Executa o assistente interativo no terminal local para pré-autorizar múltiplos monitores no portal.
 pub async fn authorize_monitors_cli(token_file: &std::path::Path) -> Result<()> {
-    authorize_monitors_interactive(token_file).await
+    let portal = PortalCoordinator::new(PortalVaultPaths::standalone_legacy(token_file));
+    authorize_monitors_with_portal(&portal, true, true).await
+}
+
+/// Pré-autoriza permissões Wayland usando o `PortalCoordinator` unificado.
+pub async fn authorize_monitors_with_portal(
+    portal: &PortalCoordinator,
+    allow_input: bool,
+    allow_screen: bool,
+) -> Result<()> {
+    authorize_monitors_interactive(portal, allow_input, allow_screen).await
 }
 
 async fn restart_capture(
@@ -221,9 +317,10 @@ async fn restart_capture(
     controller: &ScreenController,
     active_capture: &mut ActiveCaptureSession,
     config: ScreenStart,
+    allow_input: bool,
 ) -> Result<()> {
     active_capture.stop().await;
-    match controller.backend.start_capture(config).await {
+    match controller.backend.start_capture(config, allow_input).await {
         Ok(new_session) => {
             *active_capture = new_session;
             send_ready(send, &active_capture.info).await
@@ -242,13 +339,10 @@ pub async fn handle_screen_stream(
     controller: Arc<ScreenController>,
     mut settings_rx: watch::Receiver<HostSettings>,
 ) -> Result<()> {
+    // Vídeo tem prioridade menor que controle/input/terminal para não travar pings e cursor em redes fracas.
+    let _ = send.set_priority(-50);
     if !settings_rx.borrow().allow_screen {
-        let _ = write_frame(
-            &mut send,
-            &ScreenHostMsg::Error("Espelhamento de tela desativado pelo host".to_string()),
-        )
-        .await;
-        let _ = send.finish();
+        send_error_and_finish(send, "Espelhamento de tela desativado pelo host").await;
         return Ok(());
     }
 
@@ -262,23 +356,43 @@ pub async fn handle_screen_stream(
     if *gen_rx.borrow() != my_gen {
         return Ok(());
     }
-    if !settings_rx.borrow().allow_screen {
-        let _ = write_frame(
-            &mut send,
-            &ScreenHostMsg::Error("Espelhamento de tela desativado pelo host".to_string()),
-        )
-        .await;
-        let _ = send.finish();
+    let (allow_screen, allow_input) = {
+        let cur = settings_rx.borrow();
+        (cur.allow_screen, cur.allow_input)
+    };
+    if !allow_screen {
+        send_error_and_finish(send, "Espelhamento de tela desativado pelo host").await;
         return Ok(());
     }
 
     let mut config = init;
-    let mut active_capture = match controller.backend.start_capture(config).await {
-        Ok(session) => session,
-        Err(err) => {
-            let _ = write_frame(&mut send, &ScreenHostMsg::Error(format!("{err:#}"))).await;
-            let _ = send.finish();
+    enum StartupOutcome {
+        Started(Result<ActiveCaptureSession>),
+        Disabled,
+        Superseded,
+        ClientClosed,
+    }
+
+    let startup = tokio::select! {
+        biased;
+        _ = wait_until_screen_disabled(&mut settings_rx) => StartupOutcome::Disabled,
+        _ = wait_until_superseded(&mut gen_rx, my_gen) => StartupOutcome::Superseded,
+        _ = send.stopped() => StartupOutcome::ClientClosed,
+        res = controller.backend.start_capture(config, allow_input) => StartupOutcome::Started(res),
+    };
+
+    let mut active_capture = match startup {
+        StartupOutcome::Started(Ok(session)) => session,
+        StartupOutcome::Started(Err(err)) => {
+            send_error_and_finish(send, format!("{err:#}")).await;
             return Err(err);
+        }
+        StartupOutcome::Disabled => {
+            send_error_and_finish(send, "Espelhamento de tela desativado pelo host").await;
+            return Ok(());
+        }
+        StartupOutcome::Superseded | StartupOutcome::ClientClosed => {
+            return Ok(());
         }
     };
 
@@ -286,6 +400,7 @@ pub async fn handle_screen_stream(
 
     let mut last_keyframe_at = Instant::now();
     let mut last_keyframe_restart_at = Instant::now() - KEYFRAME_RESTART_COOLDOWN;
+    let mut gop_cache = HostGopCache::default();
     let mut reauth_rx: Option<tokio::sync::oneshot::Receiver<Result<PendingReauth>>> = None;
 
     loop {
@@ -294,9 +409,10 @@ pub async fn handle_screen_stream(
             s_changed = settings_rx.changed() => {
                 if s_changed.is_ok() && !settings_rx.borrow().allow_screen {
                     let reason = "Espelhamento de tela desativado pelo host".to_string();
-                    let _ = write_frame(&mut send, &ScreenHostMsg::Error(reason.clone())).await;
                     warn!("{reason}");
-                    break;
+                    active_capture.stop().await;
+                    send_error_and_finish(send, reason).await;
+                    return Ok(());
                 }
             }
             changed = gen_rx.changed() => {
@@ -309,12 +425,14 @@ pub async fn handle_screen_stream(
                 reauth_rx = None;
                 match reauth_res {
                     Ok(Ok(pending)) => {
+                        let cur_allow_input = settings_rx.borrow().allow_input;
                         match controller
                             .backend
-                            .apply_reauthorized(config, pending, &mut active_capture)
+                            .apply_reauthorized(config, cur_allow_input, pending, &mut active_capture)
                             .await
                         {
                             Ok(notice) => {
+                                gop_cache.clear();
                                 send_ready(&mut send, &active_capture.info).await?;
                                 last_keyframe_at = Instant::now();
                                 last_keyframe_restart_at = Instant::now();
@@ -354,13 +472,15 @@ pub async fn handle_screen_stream(
                     let reason = active_capture
                         .take_failure()
                         .unwrap_or_else(|| "Captura de tela encerrada inesperadamente".to_string());
-                    let _ = write_frame(&mut send, &ScreenHostMsg::Error(reason.clone())).await;
                     warn!("{reason}");
-                    break;
+                    active_capture.stop().await;
+                    send_error_and_finish(send, reason).await;
+                    return Ok(());
                 };
                 if au.keyframe {
                     last_keyframe_at = Instant::now();
                 }
+                gop_cache.record(&au);
                 if write_frame(
                     &mut send,
                     &ScreenHostMsg::Frame {
@@ -377,17 +497,63 @@ pub async fn handle_screen_stream(
                 }
             }
             msg = read_frame::<_, ScreenClientMsg>(&mut recv) => {
+                let cur_allow_input = settings_rx.borrow().allow_input;
                 match msg {
                     Ok(Some(ScreenClientMsg::Stop)) | Ok(None) => break,
                     Ok(Some(ScreenClientMsg::RequestKeyframe)) => {
+                        if gop_cache.is_complete() {
+                            // Reenvia o GOP curto em RAM (IDR + deltas) imediatamente sem reiniciar o encoder.
+                            let mut write_failed = false;
+                            for cached in gop_cache.frames() {
+                                if write_frame(
+                                    &mut send,
+                                    &ScreenHostMsg::Frame {
+                                        seq: cached.seq,
+                                        pts_ms: cached.pts_ms,
+                                        keyframe: cached.keyframe,
+                                        data: cached.data.clone(),
+                                    },
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    write_failed = true;
+                                    break;
+                                }
+                            }
+                            if write_failed {
+                                break;
+                            }
+                            continue;
+                        }
+
+                        if let Some(idr) = gop_cache.keyframe() {
+                            // Destrava o decodificador do celular de imediato com o último IDR em cache.
+                            if write_frame(
+                                &mut send,
+                                &ScreenHostMsg::Frame {
+                                    seq: idr.seq,
+                                    pts_ms: idr.pts_ms,
+                                    keyframe: true,
+                                    data: idr.data.clone(),
+                                },
+                            )
+                            .await
+                            .is_err()
+                            {
+                                break;
+                            }
+                        }
+
                         let since_idr = last_keyframe_at.elapsed();
                         let since_restart = last_keyframe_restart_at.elapsed();
                         if since_idr > Duration::from_millis(1200)
                             && since_restart >= KEYFRAME_RESTART_COOLDOWN
                         {
                             info!("Reiniciando encoder sob demanda para keyframe imediato");
+                            gop_cache.clear();
                             last_keyframe_restart_at = Instant::now();
-                            restart_capture(&mut send, &controller, &mut active_capture, config).await?;
+                            restart_capture(&mut send, &controller, &mut active_capture, config, cur_allow_input).await?;
                             last_keyframe_at = Instant::now();
                         }
                     }
@@ -395,7 +561,8 @@ pub async fn handle_screen_stream(
                         let next = next_raw.sanitized();
                         if next != config {
                             config = next;
-                            restart_capture(&mut send, &controller, &mut active_capture, config).await?;
+                            gop_cache.clear();
+                            restart_capture(&mut send, &controller, &mut active_capture, config, cur_allow_input).await?;
                             last_keyframe_at = Instant::now();
                             last_keyframe_restart_at = Instant::now();
                         }
@@ -403,10 +570,11 @@ pub async fn handle_screen_stream(
                     Ok(Some(ScreenClientMsg::SwitchMonitor)) => {
                         match controller
                             .backend
-                            .switch_monitor(config, &mut active_capture)
+                            .switch_monitor(config, cur_allow_input, &mut active_capture)
                             .await
                         {
                             Ok(true) => {
+                                gop_cache.clear();
                                 send_ready(&mut send, &active_capture.info).await?;
                                 last_keyframe_at = Instant::now();
                                 last_keyframe_restart_at = Instant::now();
@@ -415,7 +583,7 @@ pub async fn handle_screen_stream(
                                 let avail = active_capture.info.available_monitors;
                                 let msg = if avail > 1 {
                                     format!(
-                                        "O GNOME só liberou 1 dos {avail} monitores. Rode `oraculo-host monitors` no PC e marque todos os monitores."
+                                        "O GNOME só liberou 1 dos {avail} monitores. Reautorize em Acesso no PC e marque todos os monitores."
                                     )
                                 } else {
                                     "Apenas 1 monitor ativo detectado neste PC.".to_string()
@@ -423,11 +591,8 @@ pub async fn handle_screen_stream(
                                 send_notice(&mut send, msg).await;
                             }
                             Err(err) => {
-                                let _ = write_frame(
-                                    &mut send,
-                                    &ScreenHostMsg::Error(format!("{err:#}")),
-                                )
-                                .await;
+                                active_capture.stop().await;
+                                send_error_and_finish(send, format!("{err:#}")).await;
                                 return Err(err);
                             }
                         }
@@ -439,7 +604,7 @@ pub async fn handle_screen_stream(
                                 "A janela de seleção de monitores já está aberta no PC.",
                             )
                             .await;
-                        } else if let Some(rx) = controller.backend.begin_reauthorize() {
+                        } else if let Some(rx) = controller.backend.begin_reauthorize(cur_allow_input) {
                             reauth_rx = Some(rx);
                             send_notice(
                                 &mut send,
@@ -893,7 +1058,7 @@ fn build_gst_pipeline_args(
         format!("fd={pw_fd}"),
         pw_source_arg.into(),
         "do-timestamp=true".into(),
-        "keepalive-time=1000".into(),
+        "keepalive-time=500".into(),
         "min-buffers=1".into(),
         "max-buffers=2".into(),
         "!".into(),
@@ -1013,15 +1178,11 @@ mod linux {
         GdpPacket, GdpPacketReader, GstEncoderKind, NegotiatedStreamInfo, ScreenFrameQueue,
         build_gst_pipeline_args, normalize_annex_b_au, parse_gdp_caps_dimensions,
     };
-    use crate::config::write_private_file;
+    use crate::portal::{PortalCoordinator, PortalMonitor, PortalScreenGrant};
     use anyhow::{Context, Result, bail};
-    use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
-    use ashpd::desktop::{PersistMode, Session};
     use oraculo_proto::ScreenStart;
-    use std::fs;
     use std::io::Read;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-    use std::path::{Path, PathBuf};
     use std::process::Stdio;
     use std::sync::{
         Arc, Mutex as StdMutex,
@@ -1037,6 +1198,7 @@ mod linux {
     const CHILD_PW_FD: i32 = 3;
     const CHILD_OUT_FD: i32 = 4;
 
+    #[cfg(test)]
     pub(super) fn is_drm_connector_active(status: &str, enabled: Option<&str>) -> bool {
         if status.trim() != "connected" {
             return false;
@@ -1047,46 +1209,13 @@ mod linux {
         }
     }
 
-    pub(super) fn detect_connected_monitors() -> u8 {
-        let Ok(entries) = fs::read_dir("/sys/class/drm") else {
-            return 0;
-        };
-        let mut count = 0u8;
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_lossy = name.to_string_lossy();
-            if !name_lossy.starts_with("card") || !name_lossy.contains('-') {
-                continue;
-            }
-            let path = entry.path();
-            let Ok(status) = fs::read_to_string(path.join("status")) else {
-                continue;
-            };
-            let enabled = fs::read_to_string(path.join("enabled")).ok();
-            if is_drm_connector_active(&status, enabled.as_deref()) {
-                count = count.saturating_add(1);
-            }
-        }
-        count
-    }
+    pub type PendingReauth = PortalScreenGrant;
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(super) struct PortalMonitor {
-        pub(super) node_id: u32,
-        pub(super) position: (i32, i32),
-        pub(super) pw_source_arg: String,
-        pub(super) source_size: Option<(u16, u16)>,
-    }
-
-    pub struct PortalScreencast {
-        proxy: Screencast,
-        session: Session<Screencast>,
+    struct MonitorSelectionState {
         monitors: Vec<PortalMonitor>,
         active_monitor: usize,
         available_monitors: u8,
     }
-
-    pub type PendingReauth = PortalScreencast;
 
     struct ReauthFlagGuard(Arc<AtomicBool>);
 
@@ -1096,152 +1225,50 @@ mod linux {
         }
     }
 
-    impl PortalScreencast {
-        async fn open(token_file: &Path, use_saved_token: bool) -> Result<Self> {
-            let proxy = Screencast::new()
-                .await
-                .context("Portal ScreenCast indisponível na sessão gráfica")?;
-            let session = proxy
-                .create_session(Default::default())
-                .await
-                .context("Falha ao criar sessão ScreenCast")?;
-
-            let saved_token = if use_saved_token {
-                fs::read_to_string(token_file)
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-            } else {
-                None
-            };
-
-            let options = SelectSourcesOptions::default()
-                .set_sources(SourceType::MONITOR)
-                .set_multiple(true)
-                .set_cursor_mode(CursorMode::EMBEDDED)
-                .set_persist_mode(PersistMode::ExplicitlyRevoked)
-                .set_restore_token(saved_token.as_deref());
-
-            proxy
-                .select_sources(&session, options)
-                .await
-                .context("Falha ao selecionar monitor no portal ScreenCast")?;
-
-            let response = proxy
-                .start(&session, None, Default::default())
-                .await
-                .context("Falha ao iniciar permissão de compartilhamento de tela")?
-                .response()
-                .context("Compartilhamento de tela cancelado ou negado no PC")?;
-
-            if let Some(token) = response.restore_token() {
-                if let Err(err) = write_private_file(token_file, token.as_bytes()) {
-                    warn!("Não foi possível salvar screencast_token: {err:#}");
-                }
-            }
-
-            let mut monitors: Vec<PortalMonitor> = response
-                .streams()
-                .iter()
-                .map(|stream| {
-                    let pw_source_arg = if let Some(serial) = stream.pipewire_serial() {
-                        format!("target-object={serial}")
-                    } else {
-                        format!("path={}", stream.pipe_wire_node_id())
-                    };
-                    let source_size = stream
-                        .size()
-                        .and_then(|(w, h)| Some((u16::try_from(w).ok()?, u16::try_from(h).ok()?)))
-                        .filter(|(w, h)| *w >= 320 && *h >= 240);
-                    PortalMonitor {
-                        node_id: stream.pipe_wire_node_id(),
-                        position: stream.position().unwrap_or((i32::MAX, i32::MAX)),
-                        pw_source_arg,
-                        source_size,
-                    }
-                })
-                .collect();
-
-            if monitors.is_empty() {
-                bail!("Nenhum monitor foi selecionado para compartilhamento");
-            }
-            monitors.sort_by_key(|m| (m.position.0, m.position.1, m.node_id));
-
-            let mon_count_u8 = u8::try_from(monitors.len().min(u8::MAX as usize)).unwrap_or(1);
-            let available_monitors = detect_connected_monitors().max(mon_count_u8).max(1);
-
-            if monitors.len() == 1 && available_monitors > 1 {
-                warn!(
-                    available_monitors,
-                    "Há {available_monitors} monitores ativos no PC, mas apenas 1 foi autorizado no GNOME. Para alternar pelo celular sem abrir janela no PC, rode `oraculo-host monitors` e selecione TODOS os monitores antes de clicar em Compartilhar."
-                );
-            }
-
-            info!(
-                monitor_count = monitors.len(),
-                available_monitors,
-                first_node_id = monitors[0].node_id,
-                first_source = %monitors[0].pw_source_arg,
-                first_size = ?monitors[0].source_size,
-                "Portal ScreenCast autorizado pelo sistema"
+    pub async fn authorize_monitors_interactive(
+        portal: &PortalCoordinator,
+        allow_input: bool,
+        allow_screen: bool,
+    ) -> Result<()> {
+        let topology = portal.topology();
+        println!("Abrindo seletor de permissões do sistema (Wayland Portal)...");
+        if topology.active_outputs > 1 {
+            println!(
+                "Detectados {} monitores ativos ({}).",
+                topology.active_outputs, topology.label
             );
-
-            Ok(Self {
-                proxy,
-                session,
-                monitors,
-                active_monitor: 0,
-                available_monitors,
-            })
-        }
-
-        fn selected_monitor(&self) -> (u8, u8, u8, &PortalMonitor) {
-            let count = self.monitors.len();
-            let idx = self.active_monitor.min(count.saturating_sub(1));
-            let monitor = &self.monitors[idx];
-            let count_u8 = u8::try_from(count.min(u8::MAX as usize)).unwrap_or(1);
-            let avail_u8 = self.available_monitors.max(count_u8).max(1);
-            (
-                u8::try_from(idx).unwrap_or(u8::MAX),
-                count_u8,
-                avail_u8,
-                monitor,
-            )
-        }
-
-        async fn open_pipewire_fd(&self) -> Result<OwnedFd> {
-            self.proxy
-                .open_pipe_wire_remote(&self.session, Default::default())
-                .await
-                .context("Falha ao abrir socket PipeWire do portal ScreenCast")
-        }
-    }
-
-    pub async fn authorize_monitors_interactive(token_file: &Path) -> Result<()> {
-        let detected = detect_connected_monitors();
-        println!("Abrindo seletor de monitores do sistema (Wayland Portal)...");
-        if detected > 1 {
-            println!("Detectados {detected} monitores ativos neste computador.");
         }
         println!("No diálogo do GNOME:");
-        println!("  1. Clique para selecionar TODOS os monitores que deseja usar no celular");
-        println!("  2. Deixe marcada a opção \"Lembrar esta seleção\"");
+        if allow_screen {
+            println!("  1. Selecione TODOS os monitores que deseja usar no celular");
+        }
+        println!("  2. Deixe marcada a opção \"Lembrar desta seleção\"");
         println!("  3. Clique em \"Compartilhar\"");
         println!();
 
-        let portal = PortalScreencast::open(token_file, false).await?;
-        let count = portal.monitors.len();
-        let avail = portal.available_monitors as usize;
-        if count > 1 {
-            println!(
-                "✓ {count} monitores autorizados e salvos! Agora você pode alternar direto pelo celular (botão M1/{count}) sem abrir janelas no PC."
-            );
-        } else if avail > 1 {
-            println!(
-                "⚠ Apenas 1 de {avail} monitores foi selecionado. Rode `oraculo-host monitors` novamente e marque todos os monitores antes de clicar em Compartilhar se quiser alternar direto pelo celular."
-            );
+        let outcome = portal
+            .authorize_interactive(allow_input, allow_screen)
+            .await?;
+        let count = outcome.authorized_monitors;
+        let avail = outcome.available_monitors;
+        if allow_screen {
+            if count > 1 {
+                println!(
+                    "✓ {count} monitores autorizados e salvos para {}. Você pode alternar direto pelo celular (M1/{count}) sem abrir janelas no PC.",
+                    outcome.readiness.topology_label
+                );
+            } else if avail > 1 {
+                println!(
+                    "⚠ Apenas 1 de {avail} monitores foi selecionado. Reautorize e marque todos os monitores antes de clicar em Compartilhar se quiser alternar pelo celular."
+                );
+            } else {
+                println!(
+                    "✓ Monitor e acesso autorizados para {}.",
+                    outcome.readiness.topology_label
+                );
+            }
         } else {
-            println!("✓ 1 monitor autorizado e salvo.");
+            println!("✓ Controle remoto de mouse e teclado autorizado e salvo.");
         }
         Ok(())
     }
@@ -1267,8 +1294,8 @@ mod linux {
     }
 
     pub struct WaylandScreenBackend {
-        token_file: PathBuf,
-        portal: Mutex<Option<PortalScreencast>>,
+        portal: Arc<PortalCoordinator>,
+        selection: Mutex<MonitorSelectionState>,
         reauth_in_flight: Arc<AtomicBool>,
     }
 
@@ -1314,15 +1341,43 @@ mod linux {
     }
 
     impl WaylandScreenBackend {
-        pub fn new(token_file: PathBuf) -> Self {
+        pub fn with_portal(portal: Arc<PortalCoordinator>) -> Self {
             Self {
-                token_file,
-                portal: Mutex::new(None),
+                portal,
+                selection: Mutex::new(MonitorSelectionState {
+                    monitors: Vec::new(),
+                    active_monitor: 0,
+                    available_monitors: 1,
+                }),
                 reauth_in_flight: Arc::new(AtomicBool::new(false)),
             }
         }
 
-        pub async fn start_capture(&self, cfg: ScreenStart) -> Result<CaptureSession> {
+        async fn update_selection(
+            &self,
+            monitors: Vec<PortalMonitor>,
+            available_outputs: u8,
+            advance_from_prev: bool,
+        ) -> (u8, u8, u8, PortalMonitor) {
+            let mut sel = self.selection.lock().await;
+            let prev_node_id = sel.monitors.get(sel.active_monitor).map(|m| m.node_id);
+            let active_idx =
+                pick_reselected_monitor_index(prev_node_id, &monitors, advance_from_prev);
+            let count = monitors.len();
+            let count_u8 = u8::try_from(count.min(u8::MAX as usize)).unwrap_or(1);
+            let avail_u8 = available_outputs.max(count_u8).max(1);
+            let mon = monitors[active_idx].clone();
+            sel.monitors = monitors;
+            sel.active_monitor = active_idx;
+            sel.available_monitors = avail_u8;
+            (u8::try_from(active_idx).unwrap_or(u8::MAX), count_u8, avail_u8, mon)
+        }
+
+        pub async fn start_capture(
+            &self,
+            cfg: ScreenStart,
+            allow_input: bool,
+        ) -> Result<CaptureSession> {
             let cfg = cfg.sanitized();
             let candidates = available_encoder_candidates().await;
             if candidates.is_empty() {
@@ -1331,18 +1386,31 @@ mod linux {
                 );
             }
 
-            let mut portal_guard = self.portal.lock().await;
-            if portal_guard.is_none() {
-                *portal_guard = Some(PortalScreencast::open(&self.token_file, true).await?);
-            }
+            let grant = self
+                .portal
+                .open_pipewire_for_screen(allow_input, false)
+                .await?;
+            let (monitor_index, monitor_count, available_monitors, mon) = self
+                .update_selection(grant.monitors, grant.topology.active_outputs, false)
+                .await;
 
-            self.spawn_from_locked_portal(&mut portal_guard, &candidates, cfg)
-                .await
+            self.spawn_with_initial_fd(
+                &candidates,
+                cfg,
+                allow_input,
+                Some(grant.fd),
+                monitor_index,
+                monitor_count,
+                available_monitors,
+                mon,
+            )
+            .await
         }
 
         pub async fn switch_monitor(
             &self,
             cfg: ScreenStart,
+            allow_input: bool,
             active_capture: &mut CaptureSession,
         ) -> Result<bool> {
             let cfg = cfg.sanitized();
@@ -1353,39 +1421,60 @@ mod linux {
                 );
             }
 
-            let mut portal_guard = self.portal.lock().await;
-            let Some(portal) = portal_guard.as_mut() else {
-                return Ok(false);
+            let (monitor_index, monitor_count, available_monitors, mon) = {
+                let mut sel = self.selection.lock().await;
+                if sel.monitors.len() <= 1 {
+                    // Nunca abre diálogo do sistema às cegas a partir do botão de alternância no celular.
+                    return Ok(false);
+                }
+                sel.active_monitor = (sel.active_monitor + 1) % sel.monitors.len();
+                let count = sel.monitors.len();
+                let count_u8 = u8::try_from(count.min(u8::MAX as usize)).unwrap_or(1);
+                let avail_u8 = sel.available_monitors.max(count_u8).max(1);
+                let mon = sel.monitors[sel.active_monitor].clone();
+                (
+                    u8::try_from(sel.active_monitor).unwrap_or(u8::MAX),
+                    count_u8,
+                    avail_u8,
+                    mon,
+                )
             };
-            if portal.monitors.len() <= 1 {
-                // Nunca abre diálogo do sistema às cegas a partir do botão de alternância no celular.
-                return Ok(false);
-            }
 
-            portal.active_monitor = (portal.active_monitor + 1) % portal.monitors.len();
             info!(
-                monitor_index = portal.active_monitor + 1,
-                monitor_count = portal.monitors.len(),
+                monitor_index = monitor_index + 1,
+                monitor_count,
                 "Alternando imediatamente para próximo monitor autorizado"
             );
             active_capture.stop().await;
             let new_session = self
-                .spawn_from_locked_portal(&mut portal_guard, &candidates, cfg)
+                .spawn_with_initial_fd(
+                    &candidates,
+                    cfg,
+                    allow_input,
+                    None,
+                    monitor_index,
+                    monitor_count,
+                    available_monitors,
+                    mon,
+                )
                 .await?;
             *active_capture = new_session;
             Ok(true)
         }
 
-        pub fn begin_reauthorize(&self) -> Option<oneshot::Receiver<Result<PendingReauth>>> {
+        pub fn begin_reauthorize(
+            &self,
+            allow_input: bool,
+        ) -> Option<oneshot::Receiver<Result<PendingReauth>>> {
             if self.reauth_in_flight.swap(true, Ordering::AcqRel) {
                 return None;
             }
             let (tx, rx) = oneshot::channel();
-            let token_file = self.token_file.clone();
+            let portal = Arc::clone(&self.portal);
             let flag = Arc::clone(&self.reauth_in_flight);
             tokio::spawn(async move {
                 let _guard = ReauthFlagGuard(flag);
-                let res = PortalScreencast::open(&token_file, false).await;
+                let res = portal.open_pipewire_for_screen(allow_input, true).await;
                 let _ = tx.send(res);
             });
             Some(rx)
@@ -1394,7 +1483,8 @@ mod linux {
         pub async fn apply_reauthorized(
             &self,
             cfg: ScreenStart,
-            mut new_portal: PendingReauth,
+            allow_input: bool,
+            grant: PendingReauth,
             active_capture: &mut CaptureSession,
         ) -> Result<Option<String>> {
             let cfg = cfg.sanitized();
@@ -1405,21 +1495,23 @@ mod linux {
                 );
             }
 
-            let mut portal_guard = self.portal.lock().await;
-            let prev_node_id = portal_guard
-                .as_ref()
-                .and_then(|p| p.monitors.get(p.active_monitor))
-                .map(|m| m.node_id);
-            new_portal.active_monitor =
-                pick_reselected_monitor_index(prev_node_id, &new_portal.monitors, true);
-
-            let authorized_count = new_portal.monitors.len();
-            let available_count = new_portal.available_monitors;
+            let authorized_count = grant.monitors.len();
+            let (monitor_index, monitor_count, available_monitors, mon) = self
+                .update_selection(grant.monitors, grant.topology.active_outputs, true)
+                .await;
 
             active_capture.stop().await;
-            *portal_guard = Some(new_portal);
             let new_session = self
-                .spawn_from_locked_portal(&mut portal_guard, &candidates, cfg)
+                .spawn_with_initial_fd(
+                    &candidates,
+                    cfg,
+                    allow_input,
+                    Some(grant.fd),
+                    monitor_index,
+                    monitor_count,
+                    available_monitors,
+                    mon,
+                )
                 .await?;
             *active_capture = new_session;
 
@@ -1427,9 +1519,9 @@ mod linux {
                 Some(format!(
                     "{authorized_count} monitores autorizados para troca direta no celular."
                 ))
-            } else if available_count > 1 {
+            } else if available_monitors > 1 {
                 Some(format!(
-                    "Só 1 dos {available_count} monitores foi marcado no GNOME. Selecione todos os monitores antes de clicar em Compartilhar."
+                    "Só 1 dos {available_monitors} monitores foi marcado no GNOME. Selecione todos os monitores antes de clicar em Compartilhar."
                 ))
             } else {
                 None
@@ -1437,42 +1529,49 @@ mod linux {
             Ok(notice)
         }
 
-        async fn spawn_from_locked_portal(
+        #[allow(clippy::too_many_arguments)]
+        async fn spawn_with_initial_fd(
             &self,
-            portal_guard: &mut Option<PortalScreencast>,
             candidates: &[GstEncoderKind],
             cfg: ScreenStart,
+            allow_input: bool,
+            mut initial_fd: Option<OwnedFd>,
+            monitor_index: u8,
+            monitor_count: u8,
+            available_monitors: u8,
+            mon: PortalMonitor,
         ) -> Result<CaptureSession> {
             let mut last_err = None;
+            let mut cur_idx = monitor_index;
+            let mut cur_count = monitor_count;
+            let mut cur_avail = available_monitors;
+            let mut cur_mon = mon;
+
             for (attempt_idx, encoder) in candidates.iter().copied().enumerate() {
-                let pw_fd = match portal_guard.as_ref().unwrap().open_pipewire_fd().await {
-                    Ok(fd) => fd,
-                    Err(first_err) => {
-                        warn!("Sessão ScreenCast expirada ou inválida ({first_err:#}); reabrindo");
-                        let prev_node_id = portal_guard
-                            .as_ref()
-                            .and_then(|p| p.monitors.get(p.active_monitor))
-                            .map(|m| m.node_id);
-                        let mut reopened = PortalScreencast::open(&self.token_file, true).await?;
-                        reopened.active_monitor =
-                            pick_reselected_monitor_index(prev_node_id, &reopened.monitors, false);
-                        *portal_guard = Some(reopened);
-                        portal_guard.as_ref().unwrap().open_pipewire_fd().await?
-                    }
+                let pw_fd = if let Some(fd) = initial_fd.take() {
+                    fd
+                } else {
+                    let grant = self
+                        .portal
+                        .open_pipewire_for_screen(allow_input, false)
+                        .await?;
+                    let (idx, cnt, avail, next_mon) = self
+                        .update_selection(grant.monitors, grant.topology.active_outputs, false)
+                        .await;
+                    cur_idx = idx;
+                    cur_count = cnt;
+                    cur_avail = avail;
+                    cur_mon = next_mon;
+                    grant.fd
                 };
-                let portal_ref = portal_guard.as_ref().unwrap();
-                let (monitor_index, monitor_count, available_monitors, mon) =
-                    portal_ref.selected_monitor();
-                let pw_source_arg = mon.pw_source_arg.clone();
-                let source_size = mon.source_size;
 
                 match spawn_gst_pipeline(
                     cfg,
-                    &pw_source_arg,
-                    source_size,
-                    monitor_index,
-                    monitor_count,
-                    available_monitors,
+                    &cur_mon.pw_source_arg,
+                    cur_mon.source_size,
+                    cur_idx,
+                    cur_count,
+                    cur_avail,
                     pw_fd,
                     encoder,
                 )
@@ -1793,9 +1892,9 @@ mod linux {
 #[cfg(not(target_os = "linux"))]
 mod stub {
     use super::{NegotiatedStreamInfo, ScreenFrameQueue};
+    use crate::portal::PortalCoordinator;
     use anyhow::{Result, bail};
     use oraculo_proto::ScreenStart;
-    use std::path::PathBuf;
     use std::sync::Arc;
 
     pub struct StubScreenBackend;
@@ -1815,16 +1914,24 @@ mod stub {
 
     pub struct PendingReauth;
 
-    pub async fn authorize_monitors_interactive(_token_file: &std::path::Path) -> Result<()> {
+    pub async fn authorize_monitors_interactive(
+        _portal: &PortalCoordinator,
+        _allow_input: bool,
+        _allow_screen: bool,
+    ) -> Result<()> {
         bail!("Pré-seleção de monitores disponível apenas para Linux/Wayland")
     }
 
     impl StubScreenBackend {
-        pub fn new(_token_file: PathBuf) -> Self {
+        pub fn with_portal(_portal: Arc<PortalCoordinator>) -> Self {
             Self
         }
 
-        pub async fn start_capture(&self, _cfg: ScreenStart) -> Result<CaptureSession> {
+        pub async fn start_capture(
+            &self,
+            _cfg: ScreenStart,
+            _allow_input: bool,
+        ) -> Result<CaptureSession> {
             bail!(
                 "Captura de tela ainda implementada apenas para Linux/Wayland (backend Windows DXGI planejado)"
             )
@@ -1833,6 +1940,7 @@ mod stub {
         pub async fn switch_monitor(
             &self,
             _cfg: ScreenStart,
+            _allow_input: bool,
             _active_capture: &mut CaptureSession,
         ) -> Result<bool> {
             bail!("Alternância de monitor disponível apenas para Linux/Wayland")
@@ -1840,6 +1948,7 @@ mod stub {
 
         pub fn begin_reauthorize(
             &self,
+            _allow_input: bool,
         ) -> Option<tokio::sync::oneshot::Receiver<Result<PendingReauth>>> {
             None
         }
@@ -1847,6 +1956,7 @@ mod stub {
         pub async fn apply_reauthorized(
             &self,
             _cfg: ScreenStart,
+            _allow_input: bool,
             _new_portal: PendingReauth,
             _active_capture: &mut CaptureSession,
         ) -> Result<Option<String>> {
@@ -2127,17 +2237,23 @@ mod tests {
     #[test]
     fn multi_monitor_selection_advances_to_other_monitor_and_preserves_index_on_reopen() {
         let monitors = vec![
-            linux::PortalMonitor {
+            crate::portal::PortalMonitor {
                 node_id: 42,
-                position: (0, 0),
                 pw_source_arg: "path=42".into(),
                 source_size: Some((1920, 1080)),
+                width: 1920,
+                height: 1080,
+                origin_x: 0,
+                origin_y: 0,
             },
-            linux::PortalMonitor {
+            crate::portal::PortalMonitor {
                 node_id: 88,
-                position: (1920, 0),
                 pw_source_arg: "path=88".into(),
                 source_size: Some((2560, 1440)),
+                width: 2560,
+                height: 1440,
+                origin_x: 1920,
+                origin_y: 0,
             },
         ];
 
@@ -2154,5 +2270,62 @@ mod tests {
         assert!(linux::is_drm_connector_active("connected", None));
         assert!(!linux::is_drm_connector_active("connected\n", Some("disabled\n")));
         assert!(!linux::is_drm_connector_active("disconnected\n", Some("enabled\n")));
+    }
+
+    #[test]
+    fn host_gop_cache_replays_short_gop_and_preserves_idr_on_overflow() {
+        let mut cache = HostGopCache::default();
+        assert!(!cache.is_complete());
+        assert!(cache.keyframe().is_none());
+
+        // Delta antes do primeiro IDR é ignorado.
+        cache.record(&EncodedAccessUnit {
+            seq: 1,
+            pts_ms: 0,
+            keyframe: false,
+            data: vec![0, 0, 0, 1, 0x61],
+        });
+        assert!(!cache.is_complete());
+
+        cache.record(&EncodedAccessUnit {
+            seq: 2,
+            pts_ms: 33,
+            keyframe: true,
+            data: vec![0, 0, 0, 1, 0x65, 1, 2],
+        });
+        assert!(cache.is_complete());
+        assert_eq!(cache.frames().len(), 1);
+
+        for seq in 3..=6 {
+            cache.record(&EncodedAccessUnit {
+                seq,
+                pts_ms: seq * 33,
+                keyframe: false,
+                data: vec![0, 0, 0, 1, 0x61, seq as u8],
+            });
+        }
+        assert!(cache.is_complete());
+        assert_eq!(cache.frames().len(), MAX_HOST_GOP_REPLAY_FRAMES);
+
+        // Um delta além do limite marca GOP como incompleto, mantendo apenas o IDR em cache.
+        cache.record(&EncodedAccessUnit {
+            seq: 7,
+            pts_ms: 7 * 33,
+            keyframe: false,
+            data: vec![0, 0, 0, 1, 0x61, 7],
+        });
+        assert!(!cache.is_complete());
+        assert_eq!(cache.frames().len(), 1);
+        assert_eq!(cache.keyframe().unwrap().seq, 2);
+
+        // Novo IDR zera o estado e volta a ficar completo.
+        cache.record(&EncodedAccessUnit {
+            seq: 8,
+            pts_ms: 8 * 33,
+            keyframe: true,
+            data: vec![0, 0, 0, 1, 0x65, 9],
+        });
+        assert!(cache.is_complete());
+        assert_eq!(cache.keyframe().unwrap().seq, 8);
     }
 }

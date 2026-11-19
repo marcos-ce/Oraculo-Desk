@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 use directories::ProjectDirs;
 use iroh::SecretKey;
 use oraculo_proto::QuickCommandInfo;
+pub use oraculo_proto::wol::normalize_wol_mac;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -18,6 +19,8 @@ pub struct HostPaths {
     pub settings_file: PathBuf,
     pub remote_desktop_token_file: PathBuf,
     pub screencast_token_file: PathBuf,
+    pub portal_tokens_file: PathBuf,
+    pub control_endpoint_file: PathBuf,
 }
 
 impl HostPaths {
@@ -38,6 +41,8 @@ impl HostPaths {
             settings_file: config_dir.join("settings.toml"),
             remote_desktop_token_file: data_dir.join("remote_desktop_token"),
             screencast_token_file: data_dir.join("screencast_token"),
+            portal_tokens_file: data_dir.join("portal_tokens.json"),
+            control_endpoint_file: data_dir.join("control_endpoint.json"),
         })
     }
 }
@@ -121,7 +126,8 @@ impl TrustedPeersStore {
             .as_secs();
 
         let mut guard = self.peers.write().await;
-        guard.insert(
+        let mut draft = guard.clone();
+        draft.insert(
             endpoint_id.clone(),
             TrustedPeer {
                 endpoint_id,
@@ -129,16 +135,21 @@ impl TrustedPeersStore {
                 paired_at_unix: now,
             },
         );
-        self.persist_locked(&guard).await
+        self.persist_locked(&draft).await?;
+        *guard = draft;
+        Ok(())
     }
 
     pub async fn revoke(&self, endpoint_id: &str) -> Result<bool> {
         let mut guard = self.peers.write().await;
-        let removed = guard.remove(endpoint_id).is_some();
-        if removed {
-            self.persist_locked(&guard).await?;
+        if !guard.contains_key(endpoint_id) {
+            return Ok(false);
         }
-        Ok(removed)
+        let mut draft = guard.clone();
+        draft.remove(endpoint_id);
+        self.persist_locked(&draft).await?;
+        *guard = draft;
+        Ok(true)
     }
 
     /// Recarrega `trusted_peers.json` se alterado externamente (ex.: CLI `revoke`) e devolve IDs removidos.
@@ -190,6 +201,8 @@ pub struct HostSettings {
     pub allow_screen: bool,
     pub allow_commands_run: bool,
     pub allow_commands_edit: bool,
+    pub allow_rdp_tunnel: bool,
+    pub rdp_port: u16,
     pub wol_enabled: bool,
     pub wol_mac: Option<String>,
     pub wol_broadcast: Option<String>,
@@ -205,7 +218,9 @@ impl Default for HostSettings {
             allow_screen: true,
             allow_commands_run: true,
             allow_commands_edit: true,
-            wol_enabled: false,
+            allow_rdp_tunnel: true,
+            rdp_port: 3389,
+            wol_enabled: true,
             wol_mac: None,
             wol_broadcast: None,
         }
@@ -258,6 +273,9 @@ impl SettingsStore {
                 draft.wol_mac = Some(normalize_wol_mac(trimmed)?);
             }
         }
+        if draft.rdp_port == 0 {
+            draft.rdp_port = 3389;
+        }
         persist_settings_file(&self.path, &draft)?;
         *guard = draft.clone();
         *self.last_stamp.write().await = file_stamp(&self.path);
@@ -282,23 +300,6 @@ impl SettingsStore {
     }
 }
 
-pub fn normalize_wol_mac(raw: &str) -> Result<String> {
-    let clean: String = raw
-        .trim()
-        .chars()
-        .filter(|c| !matches!(c, ':' | '-' | '.'))
-        .collect();
-    if clean.len() != 12 || !clean.chars().all(|c| c.is_ascii_hexdigit()) {
-        bail!("Endereço MAC WoL inválido (use formato AA:BB:CC:DD:EE:FF)");
-    }
-    let upper = clean.to_ascii_uppercase();
-    let mut parts = Vec::with_capacity(6);
-    for i in (0..12).step_by(2) {
-        parts.push(&upper[i..i + 2]);
-    }
-    Ok(parts.join(":"))
-}
-
 fn load_settings_file(path: &Path) -> Result<HostSettings> {
     if !path.exists() {
         return Ok(HostSettings::default());
@@ -312,6 +313,9 @@ fn load_settings_file(path: &Path) -> Result<HostSettings> {
         if !trimmed.is_empty() {
             parsed.wol_mac = Some(normalize_wol_mac(trimmed)?);
         }
+    }
+    if parsed.rdp_port == 0 {
+        parsed.rdp_port = 3389;
     }
     Ok(parsed)
 }
@@ -607,16 +611,39 @@ args = ["lock-session"]
     }
 }
 
+/// Lock compartilhado entre streams QUIC e IPC local para serializar edições em `commands.toml`.
+pub fn commands_io_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+/// Constrói `std::process::Command` encaminhando via `flatpak-spawn --host` quando rodando em sandbox Flatpak.
+#[cfg(target_os = "linux")]
+pub fn host_std_command(program: &str) -> std::process::Command {
+    if Path::new("/.flatpak-info").exists() {
+        let mut cmd = std::process::Command::new("flatpak-spawn");
+        cmd.arg("--host").arg(program);
+        cmd
+    } else {
+        std::process::Command::new(program)
+    }
+}
+
 fn write_atomic_inner(path: &Path, data: &[u8], private_mode: bool) -> Result<()> {
+    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let base_name = path
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("oraculo");
-    let tmp = path.with_file_name(format!(".{base_name}.{}.{nonce}.tmp", std::process::id()));
+    let tmp = path.with_file_name(format!(
+        ".{base_name}.{}.{nonce}-{seq}.tmp",
+        std::process::id()
+    ));
 
     let write_res: Result<()> = (|| {
         use std::io::Write;
@@ -726,7 +753,7 @@ mod tests {
         assert!(initial.allow_terminal);
         assert!(initial.allow_files_read);
         assert!(initial.allow_files_write);
-        assert!(!initial.wol_enabled);
+        assert!(initial.wol_enabled);
 
         assert!(normalize_wol_mac("invalid-mac").is_err());
         assert_eq!(normalize_wol_mac("aa-bb-cc-11-22-33").unwrap(), "AA:BB:CC:11:22:33");
