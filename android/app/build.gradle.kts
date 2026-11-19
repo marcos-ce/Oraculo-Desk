@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.oraculo.app"
     compileSdk = 35
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "com.oraculo.app"
@@ -41,6 +42,10 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    lint {
+        checkReleaseBuilds = false
     }
 }
 

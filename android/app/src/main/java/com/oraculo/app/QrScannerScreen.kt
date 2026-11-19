@@ -1,8 +1,11 @@
 package com.oraculo.app
 
 import android.Manifest
-import android.content.Context
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
 import android.util.Size as AndroidSize
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,8 +27,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.EditNote
@@ -48,6 +55,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,7 +73,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
@@ -76,6 +87,7 @@ import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.common.GlobalHistogramBinarizer
 import com.google.zxing.common.HybridBinarizer
 import com.oraculo.app.ui.OraculoColors
+import com.oraculo.app.ui.OraculoDarkOverlayPalette
 import com.oraculo.app.ui.OraculoMetrics
 import com.oraculo.app.ui.oraculoPrimaryButtonColors
 import java.util.concurrent.Executors
@@ -89,17 +101,20 @@ fun QrScannerScreen(
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = remember(context) { context.findLifecycleOwner() }
+    val activity = remember(context) { context as? Activity }
     var hasCameraPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
                 PackageManager.PERMISSION_GRANTED
         )
     }
+    var permanentlyDenied by remember { mutableStateOf(false) }
     val defaultHint = tr(
-        "Aponte a câmera para o QR Code exibido no terminal do PC",
-        "Point the camera at the QR Code displayed on the PC terminal",
+        "Aponte a câmera para o QR Code do computador ou da ponte",
+        "Point the camera at your computer or bridge QR Code",
     )
-    var scanHint by remember {
+    var scanHint by remember(AppI18n.lang) {
         mutableStateOf(defaultHint)
     }
 
@@ -107,6 +122,24 @@ fun QrScannerScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasCameraPermission = granted
+        permanentlyDenied = !granted && activity != null &&
+            !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val owner = lifecycleOwner ?: return@DisposableEffect onDispose {}
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val grantedNow = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                    PackageManager.PERMISSION_GRANTED
+                hasCameraPermission = grantedNow
+                if (grantedNow) {
+                    permanentlyDenied = false
+                }
+            }
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(Unit) {
@@ -144,16 +177,23 @@ fun QrScannerScreen(
             if (hasCameraPermission) {
                 CameraQrPreview(
                     onDecoded = { text ->
-                        if (text.startsWith("oraculo://pair?")) {
-                            onQrScanned(text)
+                        val normalized = text.trim()
+                        if (
+                            normalized.startsWith("oraculo://pair?", ignoreCase = true) ||
+                            normalized.startsWith("oraculo://mcu-bridge?", ignoreCase = true)
+                        ) {
+                            onQrScanned(normalized)
                             true
                         } else {
                             scanHint = tr(
-                                "QR Code reconhecido não é do Oráculo (use oraculo://pair?...)",
-                                "Scanned QR Code is not an Oráculo link (use oraculo://pair?...)",
+                                "Esse QR Code não é do Oráculo.",
+                                "This QR Code isn't from Oráculo.",
                             )
                             false
                         }
+                    },
+                    onCameraError = { errMsg ->
+                        scanHint = errMsg
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -170,7 +210,7 @@ fun QrScannerScreen(
                 ) {
                     Surface(
                         color = OraculoColors.Background.copy(alpha = 0.88f),
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(OraculoMetrics.CornerLarge),
                     ) {
                         Text(
                             text = scanHint,
@@ -187,23 +227,24 @@ fun QrScannerScreen(
                             containerColor = OraculoColors.SecondaryContainer,
                             contentColor = OraculoColors.OnSecondaryContainer,
                         ),
-                        shape = RoundedCornerShape(OraculoMetrics.CornerLarge),
+                        shape = RoundedCornerShape(OraculoMetrics.CornerPill),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(OraculoMetrics.ControlHeightCta),
+                            .heightIn(min = OraculoMetrics.ControlHeightCta),
                     ) {
                         Icon(
                             imageVector = Icons.Default.EditNote,
                             contentDescription = null,
                         )
                         Spacer(modifier = Modifier.padding(horizontal = 4.dp))
-                        Text(tr("Colar link oraculo://pair manualmente", "Paste oraculo://pair link manually"))
+                        Text(tr("Digitar código manualmente", "Enter code manually"))
                     }
                 }
             } else {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
                         .padding(24.dp),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -212,44 +253,72 @@ fun QrScannerScreen(
                         imageVector = Icons.Default.QrCodeScanner,
                         contentDescription = null,
                         tint = OraculoColors.Primary,
+                        modifier = Modifier.size(48.dp),
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
                         text = tr("Permissão de câmera necessária", "Camera permission required"),
                         style = MaterialTheme.typography.titleMedium,
                         color = OraculoColors.OnSurface,
+                        textAlign = TextAlign.Center,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = tr(
-                            "Libere a câmera para ler o QR Code gerado por ./dist/oraculo-host serve --pair, ou cole o link manualmente.",
-                            "Allow camera access to scan the QR Code generated by oraculo-host serve --pair, or paste the link manually.",
-                        ),
+                        text = if (permanentlyDenied) {
+                            tr(
+                                "O acesso à câmera foi negado. Abra as configurações do app para liberar a câmera ou digite o código de 8 caracteres.",
+                                "Camera access was denied. Open app settings to enable the camera, or enter the 8-character code.",
+                            )
+                        } else {
+                            tr(
+                                "Libere a câmera para ler o QR Code do computador ou da ponte, ou digite o código de 8 caracteres.",
+                                "Allow camera access to scan a computer or bridge QR Code, or enter the 8-character code.",
+                            )
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = OraculoColors.OnSurfaceMuted,
                         textAlign = TextAlign.Center,
                     )
                     Spacer(modifier = Modifier.height(20.dp))
                     Button(
-                        onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                        shape = RoundedCornerShape(OraculoMetrics.CornerLarge),
+                        onClick = {
+                            if (permanentlyDenied) {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(
+                                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                            Uri.fromParts("package", context.packageName, null),
+                                        ),
+                                    )
+                                }
+                            } else {
+                                permissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
+                        },
+                        shape = RoundedCornerShape(OraculoMetrics.CornerPill),
                         colors = oraculoPrimaryButtonColors(),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(OraculoMetrics.ControlHeightCta),
+                            .heightIn(min = OraculoMetrics.ControlHeightCta),
                     ) {
-                        Text(tr("Permitir Câmera", "Allow Camera"))
+                        Text(
+                            if (permanentlyDenied) {
+                                tr("Abrir configurações", "Open settings")
+                            } else {
+                                tr("Permitir câmera", "Allow camera")
+                            },
+                        )
                     }
                     Spacer(modifier = Modifier.height(10.dp))
                     OutlinedButton(
                         onClick = onOpenManualInput,
                         border = BorderStroke(1.dp, OraculoColors.Outline),
-                        shape = RoundedCornerShape(OraculoMetrics.CornerLarge),
+                        shape = RoundedCornerShape(OraculoMetrics.CornerPill),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(OraculoMetrics.ControlHeightCta),
+                            .heightIn(min = OraculoMetrics.ControlHeightCta),
                     ) {
-                        Text(tr("Colar link manual", "Paste link manually"))
+                        Text(tr("Digitar código", "Enter code"))
                     }
                 }
             }
@@ -259,8 +328,8 @@ fun QrScannerScreen(
 
 @Composable
 private fun ScannerOverlay(modifier: Modifier = Modifier) {
-    val scrimColor = Color(0xFF0C0E12).copy(alpha = 0.68f)
-    val bracketColor = OraculoColors.Primary
+    val scrimColor = OraculoDarkOverlayPalette.TerminalBackground.copy(alpha = 0.72f)
+    val bracketColor = OraculoDarkOverlayPalette.Primary
     Canvas(
         modifier = modifier.graphicsLayer {
             compositingStrategy = CompositingStrategy.Offscreen
@@ -313,13 +382,21 @@ private fun ScannerOverlay(modifier: Modifier = Modifier) {
     }
 }
 
+private class QrDecodeScratch {
+    var yBytes: ByteArray = ByteArray(0)
+    var rowBuffer: ByteArray = ByteArray(0)
+}
+
 @Composable
 private fun CameraQrPreview(
     onDecoded: (String) -> Boolean,
+    onCameraError: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = remember(context) { context.findLifecycleOwner() } ?: return
+    val currentOnDecoded by rememberUpdatedState(onDecoded)
+    val currentOnCameraError by rememberUpdatedState(onCameraError)
     val previewView = remember {
         PreviewView(context).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
@@ -330,6 +407,7 @@ private fun CameraQrPreview(
         val executor = Executors.newSingleThreadExecutor()
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         val alreadyHandled = AtomicBoolean(false)
+        val scratch = QrDecodeScratch()
         val reader = MultiFormatReader().apply {
             setHints(
                 mapOf(
@@ -339,12 +417,21 @@ private fun CameraQrPreview(
             )
         }
         var boundProvider: ProcessCameraProvider? = null
+        var boundAnalysis: ImageAnalysis? = null
         var disposed = false
 
         cameraProviderFuture.addListener(
             {
                 if (disposed) return@addListener
-                val provider = runCatching { cameraProviderFuture.get() }.getOrNull() ?: return@addListener
+                val provider = runCatching { cameraProviderFuture.get() }.getOrElse {
+                    currentOnCameraError(
+                        tr(
+                            "Não foi possível iniciar a câmera. Digite o código manualmente.",
+                            "Could not start the camera. Enter the code manually.",
+                        ),
+                    )
+                    return@addListener
+                }
                 boundProvider = provider
 
                 val preview = Preview.Builder().build().also {
@@ -367,11 +454,12 @@ private fun CameraQrPreview(
                     .also { imageAnalysis ->
                         imageAnalysis.setAnalyzer(executor) { imageProxy ->
                             try {
-                                if (!alreadyHandled.get()) {
-                                    val decoded = decodeQrFromImage(reader, imageProxy)
+                                if (!disposed && !alreadyHandled.get()) {
+                                    val decoded = decodeQrFromImage(reader, imageProxy, scratch)
                                     if (decoded != null) {
                                         previewView.post {
-                                            if (!alreadyHandled.get() && onDecoded(decoded)) {
+                                            if (disposed) return@post
+                                            if (!alreadyHandled.get() && currentOnDecoded(decoded)) {
                                                 alreadyHandled.set(true)
                                             }
                                         }
@@ -382,6 +470,7 @@ private fun CameraQrPreview(
                             }
                         }
                     }
+                boundAnalysis = analysis
 
                 runCatching {
                     provider.unbindAll()
@@ -391,6 +480,13 @@ private fun CameraQrPreview(
                         preview,
                         analysis,
                     )
+                }.onFailure {
+                    currentOnCameraError(
+                        tr(
+                            "Câmera traseira indisponível neste aparelho. Digite o código manualmente.",
+                            "Rear camera unavailable on this device. Enter the code manually.",
+                        ),
+                    )
                 }
             },
             ContextCompat.getMainExecutor(context),
@@ -398,6 +494,7 @@ private fun CameraQrPreview(
 
         onDispose {
             disposed = true
+            runCatching { boundAnalysis?.clearAnalyzer() }
             runCatching { boundProvider?.unbindAll() }
             executor.shutdown()
         }
@@ -428,7 +525,11 @@ private fun tryDecodeLuminance(reader: MultiFormatReader, source: LuminanceSourc
     return null
 }
 
-private fun decodeQrFromImage(reader: MultiFormatReader, image: ImageProxy): String? {
+private fun decodeQrFromImage(
+    reader: MultiFormatReader,
+    image: ImageProxy,
+    scratch: QrDecodeScratch,
+): String? {
     val plane = image.planes.firstOrNull() ?: return null
     val width = image.width
     val height = image.height
@@ -438,12 +539,24 @@ private fun decodeQrFromImage(reader: MultiFormatReader, image: ImageProxy): Str
     buffer.rewind()
     val rowStride = plane.rowStride
     val pixelStride = plane.pixelStride
+    val needed = width * height
+    if (needed <= 0) return null
 
-    val yBytes = ByteArray(width * height)
+    if (scratch.yBytes.size != needed) {
+        scratch.yBytes = ByteArray(needed)
+    }
+    val yBytes = scratch.yBytes
     if (pixelStride == 1 && rowStride == width) {
-        buffer.get(yBytes)
+        val toRead = minOf(needed, buffer.remaining())
+        if (toRead < needed) {
+            yBytes.fill(0)
+        }
+        buffer.get(yBytes, 0, toRead)
     } else {
-        val rowBuffer = ByteArray(rowStride)
+        if (scratch.rowBuffer.size < rowStride) {
+            scratch.rowBuffer = ByteArray(rowStride)
+        }
+        val rowBuffer = scratch.rowBuffer
         for (row in 0 until height) {
             val remaining = buffer.remaining()
             if (remaining <= 0) break

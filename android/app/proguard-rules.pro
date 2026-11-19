@@ -2,3 +2,7 @@
 -keepclassmembers class * extends com.sun.jna.** { *; }
 -keep class uniffi.oraculo_mobile_core.** { *; }
 -keepclassmembers class uniffi.oraculo_mobile_core.** { *; }
+-dontwarn java.awt.Component
+-dontwarn java.awt.GraphicsEnvironment
+-dontwarn java.awt.HeadlessException
+-dontwarn java.awt.Window

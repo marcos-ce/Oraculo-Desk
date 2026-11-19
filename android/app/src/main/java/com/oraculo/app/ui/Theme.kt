@@ -32,6 +32,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButtonColors
 import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SwitchColors
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -40,12 +42,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
-import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,6 +57,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.oraculo.app.R
 
 /**
  * Tokens compartilhados de dimensões e cantos Material 3 para manter botões
@@ -76,6 +80,7 @@ object OraculoMetrics {
     val CornerSurfaceExpanded: Dp = 24.dp
     val CornerGroupedOuter: Dp = 20.dp
     val CornerGroupedInner: Dp = 8.dp
+    val CornerPill: Dp = 999.dp
 }
 
 /**
@@ -257,58 +262,61 @@ data class OraculoPalette(
 
 private val OraculoDarkPalette = OraculoPalette(
     IsDark = true,
-    Background = Color(0xFF0C0E12),
-    Surface = Color(0xFF151921),
-    SurfaceRecessed = Color(0xFF090B0E),
-    SurfaceInteractive = Color(0xFF1C212C),
-    Primary = Color(0xFF6D93D6),
-    OnPrimary = Color(0xFFFFFFFF),
-    PrimaryAction = Color(0xFF29467A),
-    OnPrimaryAction = Color(0xFFF0F3F8),
-    PrimaryActionBorder = Color(0xFF3E619E),
-    SecondaryContainer = Color(0xFF1E283B),
-    OnSecondaryContainer = Color(0xFFDCE5F5),
-    OnSurface = Color(0xFFF0F3F8),
-    OnSurfaceMuted = Color(0xFF8C96A8),
-    Outline = Color(0xFF232936),
+    Background = Color(0xFF131314),
+    Surface = Color(0xFF1E1F20),
+    SurfaceRecessed = Color(0xFF18191B),
+    SurfaceInteractive = Color(0xFF282A2C),
+    Primary = Color(0xFFA8C7FA),
+    OnPrimary = Color(0xFF062E6F),
+    PrimaryAction = Color(0xFFA8C7FA),
+    OnPrimaryAction = Color(0xFF062E6F),
+    PrimaryActionBorder = Color(0xFFA8C7FA),
+    SecondaryContainer = Color(0xFF004A77),
+    OnSecondaryContainer = Color(0xFFC2E7FF),
+    OnSurface = Color(0xFFE3E3E3),
+    OnSurfaceMuted = Color(0xFF9AA0A6),
+    Outline = Color(0xFF333537),
     Error = Color(0xFFF87171),
     OnError = Color(0xFF2E0B0B),
-    Success = Color(0xFF34D399),
-    TerminalBackground = Color(0xFF090B0E),
+    Success = Color(0xFF6DD58C),
+    TerminalBackground = Color(0xFF0E0F10),
     TerminalForeground = Color(0xFFE6EDF3),
-    TerminalBorder = Color(0xFF212733),
+    TerminalBorder = Color(0xFF282A2C),
 )
 
 private val OraculoLightPalette = OraculoPalette(
     IsDark = false,
-    Background = Color(0xFFF3F5F8),
+    Background = Color(0xFFF8F9FA),
     Surface = Color(0xFFFFFFFF),
-    SurfaceRecessed = Color(0xFFE8ECF2),
-    SurfaceInteractive = Color(0xFFF0F3F7),
-    Primary = Color(0xFF2563EB),
+    SurfaceRecessed = Color(0xFFE9EEF6),
+    SurfaceInteractive = Color(0xFFDFE3E7),
+    Primary = Color(0xFF0B57D0),
     OnPrimary = Color(0xFFFFFFFF),
-    PrimaryAction = Color(0xFF2563EB),
+    PrimaryAction = Color(0xFF0B57D0),
     OnPrimaryAction = Color(0xFFFFFFFF),
-    PrimaryActionBorder = Color(0xFF2563EB),
-    SecondaryContainer = Color(0xFFE2EBFE),
-    OnSecondaryContainer = Color(0xFF173D91),
-    OnSurface = Color(0xFF111418),
-    OnSurfaceMuted = Color(0xFF5E6775),
-    Outline = Color(0xFFE0E4EC),
+    PrimaryActionBorder = Color(0xFF0B57D0),
+    SecondaryContainer = Color(0xFFD3E3FD),
+    OnSecondaryContainer = Color(0xFF041E49),
+    OnSurface = Color(0xFF1F1F1F),
+    OnSurfaceMuted = Color(0xFF5F6368),
+    Outline = Color(0xFFDDE1E6),
     Error = Color(0xFFDC2626),
     OnError = Color(0xFFFFFFFF),
-    Success = Color(0xFF16A34A),
-    TerminalBackground = Color(0xFF101318),
+    Success = Color(0xFF146C2E),
+    TerminalBackground = Color(0xFF131314),
     TerminalForeground = Color(0xFFE6EDF3),
-    TerminalBorder = Color(0xFF262D38),
+    TerminalBorder = Color(0xFF282A2C),
 )
 
-private val LocalOraculoPalette = staticCompositionLocalOf { OraculoDarkPalette }
+private val LocalOraculoPalette = compositionLocalOf { OraculoDarkPalette }
 
 val OraculoColors: OraculoPalette
     @Composable
     @ReadOnlyComposable
     get() = LocalOraculoPalette.current
+
+val OraculoDarkOverlayPalette: OraculoPalette
+    get() = OraculoDarkPalette
 
 @Composable
 fun isOraculoDarkTheme(themeMode: ThemeMode): Boolean = when (themeMode) {
@@ -317,46 +325,108 @@ fun isOraculoDarkTheme(themeMode: ThemeMode): Boolean = when (themeMode) {
     ThemeMode.DARK -> true
 }
 
+val OraculoFontFamily = FontFamily(
+    Font(R.font.google_sans_regular, FontWeight.Normal),
+    Font(R.font.google_sans_medium, FontWeight.Medium),
+    Font(R.font.google_sans_semibold, FontWeight.SemiBold),
+    Font(R.font.google_sans_bold, FontWeight.Bold),
+)
+
 private val OraculoTypography = Typography(
+    displayLarge = TextStyle(
+        fontFamily = OraculoFontFamily,
+        fontSize = 57.sp,
+        fontWeight = FontWeight.Normal,
+        letterSpacing = (-0.25).sp,
+        lineHeight = 64.sp,
+    ),
+    displayMedium = TextStyle(
+        fontFamily = OraculoFontFamily,
+        fontSize = 45.sp,
+        fontWeight = FontWeight.Normal,
+        lineHeight = 52.sp,
+    ),
     displaySmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = OraculoFontFamily,
         fontSize = 32.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = (-1.0).sp,
+        fontWeight = FontWeight.Medium,
+        letterSpacing = (-0.75).sp,
         lineHeight = 38.sp,
     ),
+    headlineLarge = TextStyle(
+        fontFamily = OraculoFontFamily,
+        fontSize = 32.sp,
+        fontWeight = FontWeight.Medium,
+        lineHeight = 40.sp,
+    ),
+    headlineMedium = TextStyle(
+        fontFamily = OraculoFontFamily,
+        fontSize = 28.sp,
+        fontWeight = FontWeight.Medium,
+        lineHeight = 36.sp,
+    ),
+    headlineSmall = TextStyle(
+        fontFamily = OraculoFontFamily,
+        fontSize = 24.sp,
+        fontWeight = FontWeight.Medium,
+        lineHeight = 32.sp,
+    ),
     titleLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontSize = 21.sp,
-        fontWeight = FontWeight.SemiBold,
-        letterSpacing = (-0.4).sp,
+        fontFamily = OraculoFontFamily,
+        fontSize = 22.sp,
+        fontWeight = FontWeight.Medium,
+        letterSpacing = (-0.3).sp,
+        lineHeight = 28.sp,
     ),
     titleMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = OraculoFontFamily,
         fontSize = 16.sp,
-        fontWeight = FontWeight.SemiBold,
-        letterSpacing = (-0.15).sp,
+        fontWeight = FontWeight.Medium,
+        letterSpacing = (-0.1).sp,
+        lineHeight = 24.sp,
+    ),
+    titleSmall = TextStyle(
+        fontFamily = OraculoFontFamily,
+        fontSize = 14.sp,
+        fontWeight = FontWeight.Medium,
+        letterSpacing = 0.1.sp,
+        lineHeight = 20.sp,
+    ),
+    bodyLarge = TextStyle(
+        fontFamily = OraculoFontFamily,
+        fontSize = 16.sp,
+        lineHeight = 22.sp,
     ),
     bodyMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = OraculoFontFamily,
         fontSize = 14.sp,
         lineHeight = 20.sp,
     ),
     bodySmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = OraculoFontFamily,
         fontSize = 12.sp,
         lineHeight = 16.sp,
     ),
     labelLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = OraculoFontFamily,
         fontSize = 14.sp,
-        fontWeight = FontWeight.SemiBold,
+        fontWeight = FontWeight.Medium,
         letterSpacing = 0.1.sp,
+        lineHeight = 20.sp,
     ),
-    bodyLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontSize = 16.sp,
-        lineHeight = 22.sp,
+    labelMedium = TextStyle(
+        fontFamily = OraculoFontFamily,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Medium,
+        letterSpacing = 0.4.sp,
+        lineHeight = 16.sp,
+    ),
+    labelSmall = TextStyle(
+        fontFamily = OraculoFontFamily,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+        letterSpacing = 0.4.sp,
+        lineHeight = 16.sp,
     ),
 )
 
@@ -407,7 +477,7 @@ fun OraculoTheme(
             onBackground = palette.OnSurface,
             surface = palette.Surface,
             onSurface = palette.OnSurface,
-            surfaceVariant = palette.SecondaryContainer,
+            surfaceVariant = palette.SurfaceInteractive,
             onSurfaceVariant = palette.OnSurfaceMuted,
             surfaceContainerLowest = palette.SurfaceRecessed,
             surfaceContainerLow = palette.SurfaceRecessed,
@@ -433,7 +503,7 @@ fun OraculoTheme(
             onBackground = palette.OnSurface,
             surface = palette.Surface,
             onSurface = palette.OnSurface,
-            surfaceVariant = palette.SecondaryContainer,
+            surfaceVariant = palette.SurfaceInteractive,
             onSurfaceVariant = palette.OnSurfaceMuted,
             surfaceContainerLowest = palette.SurfaceRecessed,
             surfaceContainerLow = palette.SurfaceRecessed,
@@ -458,7 +528,7 @@ fun OraculoTheme(
 
 /**
  * Cores padronizadas do Material 3 para os botões principais preenchidos do app,
- * mantendo azul-cobalto no tema escuro e azul Google no tema claro.
+ * mantendo azul claro de alto contraste (#A8C7FA) no tema escuro e azul Google no tema claro.
  */
 @Composable
 fun oraculoPrimaryButtonColors(): ButtonColors = ButtonDefaults.buttonColors(
@@ -479,6 +549,20 @@ fun oraculoSegmentedButtonColors(): SegmentedButtonColors = SegmentedButtonDefau
     inactiveContainerColor = Color.Transparent,
     inactiveContentColor = OraculoColors.OnSurfaceMuted,
     inactiveBorderColor = OraculoColors.Outline,
+)
+
+/**
+ * Cores padronizadas para `Switch` com alto contraste no estado desligado
+ * nos temas claro e escuro.
+ */
+@Composable
+fun oraculoSwitchColors(): SwitchColors = SwitchDefaults.colors(
+    checkedThumbColor = OraculoColors.OnPrimaryAction,
+    checkedTrackColor = OraculoColors.PrimaryAction,
+    checkedBorderColor = OraculoColors.PrimaryAction,
+    uncheckedThumbColor = OraculoColors.OnSurfaceMuted,
+    uncheckedTrackColor = OraculoColors.SurfaceInteractive,
+    uncheckedBorderColor = OraculoColors.OnSurfaceMuted.copy(alpha = 0.65f),
 )
 
 /**

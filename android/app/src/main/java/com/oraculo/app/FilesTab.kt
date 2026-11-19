@@ -1,9 +1,12 @@
 package com.oraculo.app
 
+import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -17,10 +20,10 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -79,6 +82,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -88,6 +92,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -101,11 +106,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.oraculo.app.ui.OraculoColors
 import com.oraculo.app.ui.OraculoMetrics
 import com.oraculo.app.ui.OraculoMotion
 import com.oraculo.app.ui.oraculoPrimaryButtonColors
+import com.oraculo.app.ui.oraculoSegmentedItemShape
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -119,6 +126,7 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 
 private data class TransferProgressState(
     val title: String,
@@ -146,12 +154,16 @@ internal fun FilesTab(
     client: OraculoMobileClient,
     host: SavedHostInfo,
     isActive: Boolean,
+    allowFilesRead: Boolean? = null,
+    allowFilesWrite: Boolean? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    val loadGen = remember { AtomicLong(0L) }
+    val transferGen = remember { AtomicLong(0L) }
 
     var currentPath by remember { mutableStateOf("") }
     var listing by remember { mutableStateOf<RemoteDirectoryListing?>(null) }
@@ -164,14 +176,89 @@ internal fun FilesTab(
     var transferState by remember { mutableStateOf<TransferProgressState?>(null) }
     var selectedEntry by remember { mutableStateOf<RemoteFileEntry?>(null) }
     var previewState by remember { mutableStateOf<FilePreviewState?>(null) }
+    var pendingLegacyStorageAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+    val legacyStoragePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val action = pendingLegacyStorageAction
+        pendingLegacyStorageAction = null
+        if (granted) {
+            action?.invoke()
+        } else {
+            errorMessage = tr(
+                "Permissão de armazenamento necessária para salvar em Downloads neste Android.",
+                "Storage permission is required to save to Downloads on this Android version.",
+            )
+        }
+    }
+
+    fun runWithDownloadStoragePermission(action: () -> Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            action()
+            return
+        }
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            action()
+        } else {
+            pendingLegacyStorageAction = action
+            runCatching {
+                legacyStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }.onFailure { err ->
+                pendingLegacyStorageAction = null
+                errorMessage = formatOraculoError(err)
+            }
+        }
+    }
+
+    fun beginTransfer(label: String, isUpload: Boolean): Long {
+        val gen = transferGen.incrementAndGet()
+        mainHandler.removeCallbacksAndMessages(null)
+        transferState = TransferProgressState(
+            title = label,
+            transferredBytes = 0L,
+            totalBytes = 0L,
+            isUpload = isUpload,
+        )
+        return gen
+    }
+
+    fun finishTransfer(gen: Long) {
+        transferGen.compareAndSet(gen, gen + 1L)
+        mainHandler.removeCallbacksAndMessages(null)
+        transferState = null
+    }
+
+    DisposableEffect(host.endpointId) {
+        onDispose {
+            transferGen.incrementAndGet()
+            mainHandler.removeCallbacksAndMessages(null)
+            val appCtx = context.applicationContext
+            Thread { cleanupOldCachedFiles(appCtx, maxAgeMs = 5L * 60L * 1000L) }.start()
+        }
+    }
 
     fun loadDirectory(relPath: String, hidden: Boolean = showHidden) {
+        if (allowFilesRead == false) {
+            isLoading = false
+            errorMessage = tr(
+                "Leitura de arquivos desativada nas permissões do computador.",
+                "File browsing is disabled in your computer's permissions.",
+            )
+            return
+        }
+        val myGen = loadGen.incrementAndGet()
         scope.launch {
             isLoading = true
             errorMessage = null
             val res = withContext(Dispatchers.IO) {
                 runCatching { client.listFiles(host.endpointId, relPath, hidden) }
             }
+            if (loadGen.get() != myGen) return@launch
             res.onSuccess { data ->
                 listing = data
                 currentPath = data.currentPath
@@ -188,13 +275,32 @@ internal fun FilesTab(
     }
 
     LaunchedEffect(host.endpointId) {
+        withContext(Dispatchers.IO) {
+            cleanupOldCachedFiles(context, maxAgeMs = 0L)
+        }
         loadDirectory("")
     }
 
-    fun buildObserver(label: String, isUpload: Boolean): FileTransferObserver =
+    LaunchedEffect(allowFilesRead, allowFilesWrite) {
+        if (allowFilesRead == false) {
+            isLoading = false
+            selectedEntry = null
+            errorMessage = tr(
+                "Leitura de arquivos desativada nas permissões do computador.",
+                "File browsing is disabled in your computer's permissions.",
+            )
+        } else if (allowFilesRead == true && (listing == null || errorMessage != null) && !isLoading) {
+            loadDirectory(currentPath)
+        } else if (allowFilesWrite == true && errorMessage != null) {
+            errorMessage = null
+        }
+    }
+
+    fun buildObserver(gen: Long, label: String, isUpload: Boolean): FileTransferObserver =
         object : FileTransferObserver {
             override fun onProgress(transferred: ULong, total: ULong) {
                 mainHandler.post {
+                    if (transferGen.get() != gen) return@post
                     transferState = TransferProgressState(
                         title = label,
                         transferredBytes = transferred.toLong(),
@@ -205,196 +311,226 @@ internal fun FilesTab(
             }
         }
 
-    suspend fun fetchToCache(entry: RemoteFileEntry): Result<File> = withContext(Dispatchers.IO) {
-        runCatching {
-            val cacheDir = File(context.cacheDir, "oraculo_files")
-            cacheDir.mkdirs()
-            val cleaned = entry.name.replace('/', '_').replace('\\', '_').trim()
-            val safeName = if (cleaned.isEmpty() || cleaned == "." || cleaned == "..") {
-                "arquivo"
-            } else {
-                cleaned
+    suspend fun fetchToCache(entry: RemoteFileEntry, gen: Long, label: String): Result<File> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val cacheDir = File(context.cacheDir, "oraculo_files")
+                cacheDir.mkdirs()
+                val safeName = sanitizeDownloadFileName(entry.name)
+                val dest = File(cacheDir, safeName)
+                client.downloadFile(
+                    endpointId = host.endpointId,
+                    remoteRelPath = entry.relPath,
+                    destLocalPath = dest.absolutePath,
+                    observer = buildObserver(gen, label, isUpload = false),
+                )
+                dest
             }
-            val dest = File(cacheDir, safeName)
-            client.downloadFile(
-                endpointId = host.endpointId,
-                remoteRelPath = entry.relPath,
-                destLocalPath = dest.absolutePath,
-                observer = buildObserver(tr("Baixando ${entry.name}", "Downloading ${entry.name}"), isUpload = false),
-            )
-            dest
         }
-    }
 
     fun startDownloadToDevice(entry: RemoteFileEntry) {
-        if (transferState != null) return
+        if (transferState != null || allowFilesRead == false) return
         selectedEntry = null
-        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-        scope.launch {
-            errorMessage = null
-            statusMessage = null
-            val cachedRes = fetchToCache(entry)
-            cachedRes.onSuccess { cached ->
-                val saveRes = withContext(Dispatchers.IO) {
-                    runCatching {
-                        try {
-                            saveFileToDownloads(context, cached, entry.name, entry.mimeHint)
-                        } finally {
-                            cached.delete()
+        runWithDownloadStoragePermission {
+            if (transferState != null) return@runWithDownloadStoragePermission
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            val label = tr("Baixando ${entry.name}", "Downloading ${entry.name}")
+            val gen = beginTransfer(label, isUpload = false)
+            scope.launch {
+                try {
+                    errorMessage = null
+                    statusMessage = null
+                    val cachedRes = fetchToCache(entry, gen, label)
+                    cachedRes.onSuccess { cached ->
+                        val saveRes = withContext(Dispatchers.IO) {
+                            runCatching {
+                                try {
+                                    saveFileToDownloads(context, cached, entry.name, entry.mimeHint)
+                                } finally {
+                                    cached.delete()
+                                }
+                            }
                         }
+                        saveRes.onSuccess { savedLabel ->
+                            statusMessage = tr("Salvo em $savedLabel", "Saved to $savedLabel")
+                        }.onFailure { err ->
+                            errorMessage = tr(
+                                "Falha ao salvar em Downloads: ${formatOraculoError(err)}",
+                                "Failed to save to Downloads: ${formatOraculoError(err)}",
+                            )
+                        }
+                    }.onFailure { err ->
+                        errorMessage = formatOraculoError(err)
                     }
+                } finally {
+                    finishTransfer(gen)
                 }
-                saveRes.onSuccess { savedLabel ->
-                    statusMessage = tr("Salvo em $savedLabel", "Saved to $savedLabel")
-                }.onFailure { err ->
-                    errorMessage = tr(
-                        "Falha ao salvar em Downloads: ${formatOraculoError(err)}",
-                        "Failed to save to Downloads: ${formatOraculoError(err)}",
-                    )
-                }
-            }.onFailure { err ->
-                errorMessage = formatOraculoError(err)
             }
-            transferState = null
         }
     }
 
     fun startOpenOrShare(entry: RemoteFileEntry, shareOnly: Boolean) {
-        if (transferState != null) return
+        if (transferState != null || allowFilesRead == false) return
         selectedEntry = null
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        val label = tr("Baixando ${entry.name}", "Downloading ${entry.name}")
+        val gen = beginTransfer(label, isUpload = false)
         scope.launch {
-            errorMessage = null
-            statusMessage = null
-            val cachedRes = fetchToCache(entry)
-            cachedRes.onSuccess { cached ->
-                launchExternalFileIntent(context, cached, entry.mimeHint, shareOnly)
-                    .onFailure { err ->
-                        errorMessage = formatOraculoError(err)
-                    }
-            }.onFailure { err ->
-                errorMessage = formatOraculoError(err)
+            try {
+                errorMessage = null
+                statusMessage = null
+                val cachedRes = fetchToCache(entry, gen, label)
+                cachedRes.onSuccess { cached ->
+                    launchExternalFileIntent(context, cached, entry.mimeHint, shareOnly)
+                        .onFailure { err ->
+                            errorMessage = formatOraculoError(err)
+                        }
+                }.onFailure { err ->
+                    errorMessage = formatOraculoError(err)
+                }
+            } finally {
+                finishTransfer(gen)
             }
-            transferState = null
         }
     }
 
     fun startInAppPreview(entry: RemoteFileEntry) {
-        if (transferState != null) return
+        if (transferState != null || allowFilesRead == false) return
         selectedEntry = null
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         if (!isImageEntry(entry) && entry.size > 8UL * 1024UL * 1024UL) {
             errorMessage = tr(
-                "Arquivo muito grande para prévia de texto (${formatFileSize(entry.size.toLong())}). Use Salvar em Downloads.",
+                "Arquivo muito grande para prévia de texto (${formatFileSize(entry.size.toLong())}). Use Baixar para Downloads.",
                 "File too large for text preview (${formatFileSize(entry.size.toLong())}). Use Save to Downloads.",
             )
             return
         }
+        val label = tr("Baixando ${entry.name}", "Downloading ${entry.name}")
+        val gen = beginTransfer(label, isUpload = false)
         scope.launch {
-            errorMessage = null
-            statusMessage = null
-            val cachedRes = fetchToCache(entry)
-            cachedRes.onSuccess { cached ->
-                val decoded = withContext(Dispatchers.IO) {
-                    runCatching {
-                        if (isImageEntry(entry)) {
-                            val bmp = decodeScaledBitmap(cached, maxSidePx = 2048)
-                                ?: error(tr("Formato de imagem não suportado pelo Android", "Image format not supported by Android"))
-                            FilePreviewState.ImagePreview(entry, bmp, cached)
-                        } else {
-                            val maxPreviewBytes = 512 * 1024
-                            val bytes = cached.inputStream().use { input ->
-                                val buf = ByteArray(maxPreviewBytes + 1)
-                                var offset = 0
-                                while (offset < buf.size) {
-                                    val read = input.read(buf, offset, buf.size - offset)
-                                    if (read <= 0) break
-                                    offset += read
-                                }
-                                buf.copyOf(offset)
-                            }
-                            val text = if (bytes.size > maxPreviewBytes) {
-                                String(bytes, 0, maxPreviewBytes, Charsets.UTF_8) +
-                                    tr("\n\n[... prévia truncada em 512 KB ...]", "\n\n[... preview truncated at 512 KB ...]")
+            try {
+                errorMessage = null
+                statusMessage = null
+                val cachedRes = fetchToCache(entry, gen, label)
+                cachedRes.onSuccess { cached ->
+                    val decoded = withContext(Dispatchers.IO) {
+                        runCatching {
+                            if (isImageEntry(entry)) {
+                                val bmp = decodeScaledBitmap(cached, maxSidePx = 2048)
+                                    ?: error(tr("Formato de imagem não suportado pelo Android", "Image format not supported by Android"))
+                                FilePreviewState.ImagePreview(entry, bmp, cached)
                             } else {
-                                String(bytes, Charsets.UTF_8)
+                                val maxPreviewBytes = 512 * 1024
+                                val bytes = cached.inputStream().use { input ->
+                                    val buf = ByteArray(maxPreviewBytes + 1)
+                                    var offset = 0
+                                    while (offset < buf.size) {
+                                        val read = input.read(buf, offset, buf.size - offset)
+                                        if (read <= 0) break
+                                        offset += read
+                                    }
+                                    buf.copyOf(offset)
+                                }
+                                val text = if (bytes.size > maxPreviewBytes) {
+                                    String(bytes, 0, maxPreviewBytes, Charsets.UTF_8) +
+                                        tr("\n\n[... prévia truncada em 512 KB ...]", "\n\n[... preview truncated at 512 KB ...]")
+                                } else {
+                                    String(bytes, Charsets.UTF_8)
+                                }
+                                FilePreviewState.TextPreview(entry, text, cached)
                             }
-                            FilePreviewState.TextPreview(entry, text, cached)
                         }
                     }
-                }
-                decoded.onSuccess { preview ->
-                    previewState = preview
+                    decoded.onSuccess { preview ->
+                        previewState = preview
+                    }.onFailure { err ->
+                        runCatching { cached.delete() }
+                        errorMessage = tr(
+                            "Não foi possível abrir prévia: ${formatOraculoError(err)}",
+                            "Could not open preview: ${formatOraculoError(err)}",
+                        )
+                    }
                 }.onFailure { err ->
-                    errorMessage = tr(
-                        "Não foi possível abrir prévia: ${formatOraculoError(err)}",
-                        "Could not open preview: ${formatOraculoError(err)}",
-                    )
+                    errorMessage = formatOraculoError(err)
                 }
-            }.onFailure { err ->
-                errorMessage = formatOraculoError(err)
+            } finally {
+                finishTransfer(gen)
             }
-            transferState = null
         }
     }
 
     val uploadLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris: List<Uri> ->
-        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        if (uris.isEmpty() || transferState != null || allowFilesWrite == false) {
+            return@rememberLauncherForActivityResult
+        }
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         val targetDir = currentPath
+        val initLabel = tr("Preparando envio...", "Preparing upload...")
+        val gen = beginTransfer(initLabel, isUpload = true)
         scope.launch {
-            errorMessage = null
-            statusMessage = null
             var uploadedCount = 0
             var lastSavedRel = ""
+            try {
+                errorMessage = null
+                statusMessage = null
 
-            for ((index, uri) in uris.withIndex()) {
-                val uploadRes = withContext(Dispatchers.IO) {
-                    var tempFile: File? = null
-                    try {
-                        val displayName = resolveDocumentDisplayName(context, uri)
-                        tempFile = File(
-                            context.cacheDir,
-                            "oraculo_upload_${System.nanoTime()}.tmp",
-                        )
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            FileOutputStream(tempFile).use { output ->
-                                input.copyTo(output, bufferSize = 64 * 1024)
+                for ((index, uri) in uris.withIndex()) {
+                    val uploadRes = withContext(Dispatchers.IO) {
+                        var tempFile: File? = null
+                        try {
+                            val displayName = resolveDocumentDisplayName(context, uri)
+                            val prefix = if (uris.size > 1) "[${index + 1}/${uris.size}] " else ""
+                            val stepLabel = tr("${prefix}Enviando $displayName", "${prefix}Uploading $displayName")
+                            mainHandler.post {
+                                if (transferGen.get() == gen) {
+                                    transferState = TransferProgressState(
+                                        title = stepLabel,
+                                        transferredBytes = 0L,
+                                        totalBytes = 0L,
+                                        isUpload = true,
+                                    )
+                                }
                             }
-                        } ?: error(tr("Não foi possível ler o arquivo selecionado", "Could not read selected file"))
+                            tempFile = File(
+                                context.cacheDir,
+                                "oraculo_upload_${System.nanoTime()}.tmp",
+                            )
+                            context.contentResolver.openInputStream(uri)?.use { input ->
+                                FileOutputStream(tempFile).use { output ->
+                                    input.copyTo(output, bufferSize = 64 * 1024)
+                                }
+                            } ?: error(tr("Não foi possível ler o arquivo selecionado", "Could not read selected file"))
 
-                        val prefix = if (uris.size > 1) "[${index + 1}/${uris.size}] " else ""
-                        val res = client.uploadFile(
-                            endpointId = host.endpointId,
-                            sourceLocalPath = tempFile.absolutePath,
-                            remoteDirRelPath = targetDir,
-                            fileName = displayName,
-                            overwrite = false,
-                            observer = buildObserver(
-                                tr("${prefix}Enviando $displayName", "${prefix}Uploading $displayName"),
-                                isUpload = true,
-                            ),
-                        )
-                        Result.success(res)
-                    } catch (err: Throwable) {
-                        Result.failure(err)
-                    } finally {
-                        tempFile?.delete()
+                            val res = client.uploadFile(
+                                endpointId = host.endpointId,
+                                sourceLocalPath = tempFile.absolutePath,
+                                remoteDirRelPath = targetDir,
+                                fileName = displayName,
+                                overwrite = false,
+                                observer = buildObserver(gen, stepLabel, isUpload = true),
+                            )
+                            Result.success(res)
+                        } catch (err: Throwable) {
+                            Result.failure(err)
+                        } finally {
+                            tempFile?.delete()
+                        }
                     }
-                }
 
-                uploadRes.onSuccess { res ->
-                    uploadedCount += 1
-                    lastSavedRel = res.remoteRelPath
-                }.onFailure { err ->
-                    errorMessage = formatOraculoError(err)
+                    uploadRes.onSuccess { res ->
+                        uploadedCount += 1
+                        lastSavedRel = res.remoteRelPath
+                    }.onFailure { err ->
+                        errorMessage = formatOraculoError(err)
+                    }
+                    if (uploadRes.isFailure) break
                 }
-                if (uploadRes.isFailure) break
+            } finally {
+                finishTransfer(gen)
             }
 
-            transferState = null
             if (uploadedCount > 0) {
                 statusMessage = if (uploadedCount == 1) {
                     tr("Enviado para ~/$lastSavedRel", "Uploaded to ~/$lastSavedRel")
@@ -427,24 +563,39 @@ internal fun FilesTab(
     previewState?.let { activePreview ->
         FilePreviewDialog(
             previewState = activePreview,
-            onDismiss = { previewState = null },
-            onDownload = { cachedFile, previewEntry ->
+            onDismiss = {
+                val toDelete = when (activePreview) {
+                    is FilePreviewState.ImagePreview -> activePreview.cachedFile
+                    is FilePreviewState.TextPreview -> activePreview.cachedFile
+                }
                 previewState = null
-                scope.launch {
-                    val saveRes = withContext(Dispatchers.IO) {
-                        runCatching {
-                            saveFileToDownloads(
-                                context,
-                                cachedFile,
-                                previewEntry.name,
-                                previewEntry.mimeHint,
-                            )
+                scope.launch(Dispatchers.IO) {
+                    runCatching { toDelete.delete() }
+                }
+            },
+            onDownload = { cachedFile, previewEntry ->
+                runWithDownloadStoragePermission {
+                    previewState = null
+                    scope.launch {
+                        val saveRes = withContext(Dispatchers.IO) {
+                            runCatching {
+                                try {
+                                    saveFileToDownloads(
+                                        context,
+                                        cachedFile,
+                                        previewEntry.name,
+                                        previewEntry.mimeHint,
+                                    )
+                                } finally {
+                                    cachedFile.delete()
+                                }
+                            }
                         }
-                    }
-                    saveRes.onSuccess { savedLabel ->
-                        statusMessage = tr("Salvo em $savedLabel", "Saved to $savedLabel")
-                    }.onFailure { err ->
-                        errorMessage = formatOraculoError(err)
+                        saveRes.onSuccess { savedLabel ->
+                            statusMessage = tr("Salvo em $savedLabel", "Saved to $savedLabel")
+                        }.onFailure { err ->
+                            errorMessage = formatOraculoError(err)
+                        }
                     }
                 }
             },
@@ -458,24 +609,28 @@ internal fun FilesTab(
             .padding(bottom = 10.dp, top = 2.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        // Barra superior da aba: voltar pasta, título/sandbox, busca, ocultos, atualizar e enviar
+        // Barra superior da aba: voltar pasta, título/sandbox e ações principais
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             IconButton(
                 onClick = {
                     val parent = listing?.parentPath ?: return@IconButton
                     loadDirectory(parent)
                 },
-                enabled = listing?.parentPath != null && !isLoading,
-                modifier = Modifier.size(38.dp),
+                enabled = listing?.parentPath != null && !isLoading && allowFilesRead != false,
+                modifier = Modifier.size(44.dp),
             ) {
                 Icon(
                     imageVector = Icons.Default.ArrowUpward,
                     contentDescription = tr("Pasta acima", "Parent folder"),
-                    tint = if (listing?.parentPath != null) OraculoColors.OnSurface else OraculoColors.OnSurfaceMuted.copy(alpha = 0.4f),
+                    tint = if (listing?.parentPath != null && allowFilesRead != false) {
+                        OraculoColors.OnSurface
+                    } else {
+                        OraculoColors.OnSurfaceMuted.copy(alpha = 0.4f)
+                    },
                     modifier = Modifier.size(20.dp),
                 )
             }
@@ -497,95 +652,23 @@ internal fun FilesTab(
                 )
             }
 
-            val searchActive = isSearchOpen || searchQuery.isNotEmpty()
-            if (searchActive) {
-                FilledTonalIconButton(
-                    onClick = {
-                        isSearchOpen = false
-                        searchQuery = ""
-                    },
-                    colors = IconButtonDefaults.filledTonalIconButtonColors(
-                        containerColor = OraculoColors.SecondaryContainer,
-                        contentColor = OraculoColors.OnSecondaryContainer,
-                    ),
-                    modifier = Modifier.size(38.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = "Filtrar arquivos",
-                        modifier = Modifier.size(19.dp),
-                    )
-                }
-            } else {
-                IconButton(
-                    onClick = { isSearchOpen = true },
-                    modifier = Modifier.size(38.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = "Filtrar arquivos",
-                        tint = OraculoColors.OnSurfaceMuted,
-                        modifier = Modifier.size(19.dp),
-                    )
-                }
-            }
-
-            if (showHidden) {
-                FilledTonalIconButton(
-                    onClick = {
-                        showHidden = false
-                        loadDirectory(currentPath, hidden = false)
-                    },
-                    colors = IconButtonDefaults.filledTonalIconButtonColors(
-                        containerColor = OraculoColors.SecondaryContainer,
-                        contentColor = OraculoColors.OnSecondaryContainer,
-                    ),
-                    modifier = Modifier.size(38.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Visibility,
-                        contentDescription = "Ocultar arquivos iniciados por .",
-                        modifier = Modifier.size(19.dp),
-                    )
-                }
-            } else {
-                IconButton(
-                    onClick = {
-                        showHidden = true
-                        loadDirectory(currentPath, hidden = true)
-                    },
-                    modifier = Modifier.size(38.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.VisibilityOff,
-                        contentDescription = "Mostrar arquivos ocultos",
-                        tint = OraculoColors.OnSurfaceMuted,
-                        modifier = Modifier.size(19.dp),
-                    )
-                }
-            }
-
-            IconButton(
-                onClick = { loadDirectory(currentPath) },
-                enabled = !isLoading,
-                modifier = Modifier.size(38.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = "Atualizar pasta",
-                    tint = OraculoColors.OnSurfaceMuted,
-                    modifier = Modifier.size(19.dp),
-                )
-            }
-
-            val uploadEnabled = transferState == null
+            val uploadEnabled = transferState == null && allowFilesWrite != false
             Button(
-                onClick = { uploadLauncher.launch(arrayOf("*/*")) },
+                onClick = {
+                    runCatching {
+                        uploadLauncher.launch(arrayOf("*/*"))
+                    }.onFailure { err ->
+                        errorMessage = tr(
+                            "Não foi possível abrir o seletor de arquivos: ${formatOraculoError(err)}",
+                            "Could not open file picker: ${formatOraculoError(err)}",
+                        )
+                    }
+                },
                 enabled = uploadEnabled,
                 colors = oraculoPrimaryButtonColors(),
-                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                modifier = Modifier.height(OraculoMetrics.ControlHeightSmall),
+                shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightSmall),
             ) {
                 Icon(
                     imageVector = Icons.Default.Upload,
@@ -597,26 +680,37 @@ internal fun FilesTab(
                     text = tr("Enviar", "Upload"),
                     style = MaterialTheme.typography.labelLarge,
                     fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
 
-        // Atalhos rápidos + Breadcrumb
-        val quickPaths = listing?.quickPaths.orEmpty()
-        if (quickPaths.isNotEmpty() || currentPath.isNotEmpty()) {
+        // Atalhos rápidos + ferramentas compactas (busca, ocultos, atualizar)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            val quickPaths = listing?.quickPaths.orEmpty()
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .weight(1f)
                     .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 quickPaths.forEach { quick ->
                     val selected = currentPath == quick.relPath
+                    val chipLabel = if (quick.relPath.isEmpty()) {
+                        tr("Início (~)", "Home (~)")
+                    } else {
+                        quick.name
+                    }
                     FilterChip(
                         selected = selected,
                         onClick = { loadDirectory(quick.relPath) },
-                        enabled = !isLoading,
+                        enabled = !isLoading && allowFilesRead != false,
                         leadingIcon = if (quick.relPath.isEmpty()) {
                             {
                                 Icon(
@@ -630,7 +724,7 @@ internal fun FilesTab(
                         },
                         label = {
                             Text(
-                                text = quick.name,
+                                text = chipLabel,
                                 maxLines = 1,
                             )
                         },
@@ -642,7 +736,7 @@ internal fun FilesTab(
                             selectedLeadingIconColor = OraculoColors.OnSecondaryContainer,
                         ),
                         border = FilterChipDefaults.filterChipBorder(
-                            enabled = !isLoading,
+                            enabled = !isLoading && allowFilesRead != false,
                             selected = selected,
                             borderColor = OraculoColors.Outline,
                             selectedBorderColor = OraculoColors.SecondaryContainer,
@@ -650,6 +744,91 @@ internal fun FilesTab(
                         modifier = Modifier.height(OraculoMetrics.ControlHeightCompactChip),
                     )
                 }
+            }
+
+            val searchActive = isSearchOpen || searchQuery.isNotEmpty()
+            if (searchActive) {
+                FilledTonalIconButton(
+                    onClick = {
+                        isSearchOpen = false
+                        searchQuery = ""
+                    },
+                    enabled = allowFilesRead != false,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = OraculoColors.SecondaryContainer,
+                        contentColor = OraculoColors.OnSecondaryContainer,
+                    ),
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = tr("Filtrar arquivos", "Filter files"),
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            } else {
+                IconButton(
+                    onClick = { isSearchOpen = true },
+                    enabled = allowFilesRead != false,
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = tr("Filtrar arquivos", "Filter files"),
+                        tint = OraculoColors.OnSurfaceMuted,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            }
+
+            if (showHidden) {
+                FilledTonalIconButton(
+                    onClick = {
+                        showHidden = false
+                        loadDirectory(currentPath, hidden = false)
+                    },
+                    enabled = allowFilesRead != false,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = OraculoColors.SecondaryContainer,
+                        contentColor = OraculoColors.OnSecondaryContainer,
+                    ),
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Visibility,
+                        contentDescription = tr("Ocultar arquivos ocultos", "Hide hidden files"),
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            } else {
+                IconButton(
+                    onClick = {
+                        showHidden = true
+                        loadDirectory(currentPath, hidden = true)
+                    },
+                    enabled = allowFilesRead != false,
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.VisibilityOff,
+                        contentDescription = tr("Mostrar arquivos ocultos", "Show hidden files"),
+                        tint = OraculoColors.OnSurfaceMuted,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            }
+
+            IconButton(
+                onClick = { loadDirectory(currentPath) },
+                enabled = !isLoading && allowFilesRead != false,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = tr("Atualizar pasta", "Refresh folder"),
+                    tint = OraculoColors.OnSurfaceMuted,
+                    modifier = Modifier.size(19.dp),
+                )
             }
         }
 
@@ -678,17 +857,17 @@ internal fun FilesTab(
                             searchQuery = ""
                             isSearchOpen = false
                         },
-                        modifier = Modifier.size(28.dp),
+                        modifier = Modifier.size(40.dp),
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
-                            contentDescription = "Fechar busca",
+                            contentDescription = tr("Fechar busca", "Close search"),
                             tint = OraculoColors.OnSurfaceMuted,
-                            modifier = Modifier.size(16.dp),
+                            modifier = Modifier.size(18.dp),
                         )
                     }
                 },
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = OraculoColors.Primary,
                     unfocusedBorderColor = OraculoColors.Outline,
@@ -716,9 +895,9 @@ internal fun FilesTab(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(OraculoMetrics.CornerMedium))
                         .background(OraculoColors.Surface)
-                        .border(1.dp, OraculoColors.Primary.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                        .border(1.dp, OraculoColors.Primary.copy(alpha = 0.45f), RoundedCornerShape(OraculoMetrics.CornerMedium))
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
@@ -773,13 +952,13 @@ internal fun FilesTab(
         if (statusMessage != null) {
             Surface(
                 color = OraculoColors.SecondaryContainer,
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, OraculoColors.Primary.copy(alpha = 0.4f), RoundedCornerShape(12.dp)),
+                    .border(1.dp, OraculoColors.Primary.copy(alpha = 0.4f), RoundedCornerShape(OraculoMetrics.CornerMedium)),
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
@@ -789,12 +968,12 @@ internal fun FilesTab(
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.weight(1f),
                     )
-                    IconButton(onClick = { statusMessage = null }, modifier = Modifier.size(22.dp)) {
+                    IconButton(onClick = { statusMessage = null }, modifier = Modifier.size(36.dp)) {
                         Icon(
                             imageVector = Icons.Default.Close,
-                            contentDescription = "Fechar aviso",
+                            contentDescription = tr("Fechar aviso", "Dismiss notice"),
                             tint = OraculoColors.OnSecondaryContainer,
-                            modifier = Modifier.size(14.dp),
+                            modifier = Modifier.size(16.dp),
                         )
                     }
                 }
@@ -804,10 +983,10 @@ internal fun FilesTab(
         if (errorMessage != null) {
             Surface(
                 color = OraculoColors.Error.copy(alpha = 0.14f),
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, OraculoColors.Error.copy(alpha = 0.4f), RoundedCornerShape(12.dp)),
+                    .border(1.dp, OraculoColors.Error.copy(alpha = 0.4f), RoundedCornerShape(OraculoMetrics.CornerMedium)),
             ) {
                 Text(
                     text = errorMessage.orEmpty(),
@@ -835,13 +1014,20 @@ internal fun FilesTab(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = if (searchQuery.isBlank()) {
-                        tr(
-                            "Pasta vazia.\nUse \"Enviar\" acima para mandar arquivos do celular.",
-                            "Empty folder.\nUse \"Upload\" above to send files from your phone.",
+                    text = when {
+                        allowFilesRead == false -> tr(
+                            "Navegação de arquivos desativada no computador.",
+                            "File browsing is disabled on your computer.",
                         )
-                    } else {
-                        tr(
+                        searchQuery.isBlank() -> if (allowFilesWrite == false) {
+                            tr("Pasta vazia.", "Empty folder.")
+                        } else {
+                            tr(
+                                "Pasta vazia.\nToque em \"Enviar\" acima para mandar arquivos do celular.",
+                                "Empty folder.\nTap \"Upload\" above to send files from your phone.",
+                            )
+                        }
+                        else -> tr(
                             "Nenhum arquivo corresponde a \"$searchQuery\".",
                             "No files match \"$searchQuery\".",
                         )
@@ -856,12 +1042,17 @@ internal fun FilesTab(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(7.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                itemsIndexed(visibleEntries, key = { _, entry -> entry.relPath }) { _, entry ->
+                itemsIndexed(visibleEntries, key = { _, entry -> entry.relPath }) { index, entry ->
+                    val itemShape = remember(index, visibleEntries.size) {
+                        oraculoSegmentedItemShape(index, visibleEntries.size)
+                    }
                     FileEntryRow(
                         entry = entry,
+                        shape = itemShape,
                         onClick = {
+                            if (allowFilesRead == false) return@FileEntryRow
                             if (entry.isDir) {
                                 searchQuery = ""
                                 loadDirectory(entry.relPath)
@@ -900,7 +1091,10 @@ private fun FileEntryActionDialog(
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 Text(
                     text = "~/${entry.relPath}",
                     style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp),
@@ -919,10 +1113,11 @@ private fun FileEntryActionDialog(
                             containerColor = OraculoColors.SecondaryContainer,
                             contentColor = OraculoColors.OnSecondaryContainer,
                         ),
-                        shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                        shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(OraculoMetrics.ControlHeightDialog),
+                            .heightIn(min = OraculoMetrics.ControlHeightDialog),
                     ) {
                         Icon(
                             imageVector = if (canPreviewImage) Icons.Default.Image else Icons.Default.Description,
@@ -931,11 +1126,13 @@ private fun FileEntryActionDialog(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            if (canPreviewImage) {
-                                tr("Visualizar imagem aqui", "Preview image here")
+                            text = if (canPreviewImage) {
+                                tr("Visualizar imagem", "Preview image")
                             } else {
-                                tr("Visualizar texto aqui", "Preview text here")
-                            }
+                                tr("Visualizar texto", "Preview text")
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -943,10 +1140,11 @@ private fun FileEntryActionDialog(
                 Button(
                     onClick = onDownload,
                     colors = oraculoPrimaryButtonColors(),
-                    shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                    shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(OraculoMetrics.ControlHeightDialog),
+                        .heightIn(min = OraculoMetrics.ControlHeightDialog),
                 ) {
                     Icon(
                         imageVector = Icons.Default.Download,
@@ -954,7 +1152,11 @@ private fun FileEntryActionDialog(
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(tr("Baixar para Downloads", "Save to Downloads"))
+                    Text(
+                        text = tr("Baixar para Downloads", "Save to Downloads"),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
 
                 Row(
@@ -963,33 +1165,45 @@ private fun FileEntryActionDialog(
                 ) {
                     OutlinedButton(
                         onClick = onOpen,
-                        shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                        border = BorderStroke(1.dp, OraculoColors.Outline),
+                        shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(OraculoMetrics.ControlHeightDialog),
+                            .heightIn(min = OraculoMetrics.ControlHeightDialog),
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                             contentDescription = null,
                             modifier = Modifier.size(16.dp),
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(tr("Abrir com", "Open with"))
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = tr("Abrir", "Open"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                     OutlinedButton(
                         onClick = onShare,
-                        shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                        border = BorderStroke(1.dp, OraculoColors.Outline),
+                        shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(OraculoMetrics.ControlHeightDialog),
+                            .heightIn(min = OraculoMetrics.ControlHeightDialog),
                     ) {
                         Icon(
                             imageVector = Icons.Default.Share,
                             contentDescription = null,
                             modifier = Modifier.size(16.dp),
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(tr("Enviar", "Share"))
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = tr("Compartilhar", "Share"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }
@@ -997,8 +1211,8 @@ private fun FileEntryActionDialog(
         confirmButton = {
             TextButton(
                 onClick = onDismiss,
-                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
-                modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
+                shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightDialog),
             ) {
                 Text(tr("Fechar", "Close"), color = OraculoColors.OnSurfaceMuted)
             }
@@ -1038,7 +1252,7 @@ private fun FilePreviewDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 180.dp, max = 380.dp)
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(OraculoMetrics.CornerMedium))
                             .background(OraculoColors.TerminalBackground),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -1055,9 +1269,9 @@ private fun FilePreviewDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 160.dp, max = 380.dp)
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(OraculoMetrics.CornerMedium))
                             .background(OraculoColors.TerminalBackground)
-                            .border(1.dp, OraculoColors.TerminalBorder, RoundedCornerShape(12.dp))
+                            .border(1.dp, OraculoColors.TerminalBorder, RoundedCornerShape(OraculoMetrics.CornerMedium))
                             .padding(10.dp)
                             .verticalScroll(rememberScrollState())
                             .horizontalScroll(rememberScrollState()),
@@ -1079,19 +1293,21 @@ private fun FilePreviewDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            Button(
                 onClick = { onDownload(cachedFile, previewEntry) },
-                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
-                modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
+                colors = oraculoPrimaryButtonColors(),
+                shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightDialog),
             ) {
-                Text(tr("Baixar", "Download"), color = OraculoColors.Primary)
+                Text(tr("Baixar", "Download"))
             }
         },
         dismissButton = {
             TextButton(
                 onClick = onDismiss,
-                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
-                modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
+                shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightDialog),
             ) {
                 Text(tr("Fechar", "Close"), color = OraculoColors.OnSurfaceMuted)
             }
@@ -1102,75 +1318,93 @@ private fun FilePreviewDialog(
 @Composable
 private fun FileEntryRow(
     entry: RemoteFileEntry,
+    shape: Shape,
     onClick: () -> Unit,
 ) {
     val icon = remember(entry.isDir, entry.mimeHint, entry.name) {
         iconForFileEntry(entry)
     }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(13.dp))
-            .background(OraculoColors.Surface)
-            .border(1.dp, OraculoColors.Outline, RoundedCornerShape(13.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(11.dp),
+    Surface(
+        onClick = onClick,
+        color = OraculoColors.Surface,
+        shape = shape,
+        border = if (OraculoColors.IsDark) null else BorderStroke(1.dp, OraculoColors.Outline),
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .size(38.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(
-                    if (entry.isDir) OraculoColors.SecondaryContainer else OraculoColors.SurfaceRecessed,
-                ),
-            contentAlignment = Alignment.Center,
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(11.dp),
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (entry.isDir) OraculoColors.Primary else OraculoColors.OnSurfaceMuted,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = entry.name,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (entry.isDir) FontWeight.SemiBold else FontWeight.Medium,
-                color = OraculoColors.OnSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            val subtitle = if (entry.isDir) {
-                "${tr("Pasta", "Folder")} • ${formatUnixDate(entry.modifiedUnix.toLong())}"
-            } else {
-                "${formatFileSize(entry.size.toLong())} • ${formatUnixDate(entry.modifiedUnix.toLong())}"
-            }
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = OraculoColors.OnSurfaceMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-
-        if (!entry.isDir) {
-            val ext = entry.name.substringAfterLast('.', "").uppercase(Locale.ROOT)
-            if (ext.isNotEmpty() && ext.length <= 5 && entry.name.contains('.')) {
-                Text(
-                    text = ext,
-                    style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 10.sp),
-                    color = OraculoColors.OnSurfaceMuted,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(OraculoColors.SurfaceRecessed)
-                        .padding(horizontal = 6.dp, vertical = 3.dp),
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(OraculoMetrics.CornerMedium))
+                    .background(
+                        if (entry.isDir) OraculoColors.SecondaryContainer else OraculoColors.SurfaceRecessed,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (entry.isDir) OraculoColors.OnSecondaryContainer else OraculoColors.OnSurfaceMuted,
+                    modifier = Modifier.size(20.dp),
                 )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = entry.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (entry.isDir) FontWeight.SemiBold else FontWeight.Medium,
+                    color = OraculoColors.OnSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                val subtitle = if (entry.isDir) {
+                    "${tr("Pasta", "Folder")} • ${formatUnixDate(entry.modifiedUnix.toLong())}"
+                } else {
+                    "${formatFileSize(entry.size.toLong())} • ${formatUnixDate(entry.modifiedUnix.toLong())}"
+                }
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OraculoColors.OnSurfaceMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            if (!entry.isDir) {
+                val ext = entry.name.substringAfterLast('.', "").uppercase(Locale.ROOT)
+                if (ext.isNotEmpty() && ext.length <= 5 && entry.name.contains('.')) {
+                    Text(
+                        text = ext,
+                        style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 10.sp),
+                        color = OraculoColors.OnSurfaceMuted,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(OraculoMetrics.CornerSmall))
+                            .background(OraculoColors.SurfaceRecessed)
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun cleanupOldCachedFiles(context: Context, maxAgeMs: Long) {
+    runCatching {
+        val dir = File(context.cacheDir, "oraculo_files")
+        if (!dir.isDirectory) return
+        val cutoff = System.currentTimeMillis() - maxAgeMs
+        dir.listFiles()?.forEach { f ->
+            if (f.isFile && (maxAgeMs <= 0L || f.lastModified() <= cutoff)) {
+                runCatching { f.delete() }
             }
         }
     }
@@ -1233,7 +1467,20 @@ private fun resolveDocumentDisplayName(context: Context, uri: Uri): String {
             }
         }
     return uri.lastPathSegment?.substringAfterLast('/')?.ifBlank { null }
-        ?: "arquivo_${System.currentTimeMillis()}"
+        ?: "${tr("arquivo", "file")}_${System.currentTimeMillis()}"
+}
+
+private fun sanitizeDownloadFileName(raw: String): String {
+    val cleaned = raw
+        .replace('\u0000', '_')
+        .replace('/', '_')
+        .replace('\\', '_')
+        .trim()
+    return if (cleaned.isEmpty() || cleaned == "." || cleaned == "..") {
+        tr("arquivo", "file")
+    } else {
+        cleaned
+    }
 }
 
 private fun saveFileToDownloads(
@@ -1242,30 +1489,31 @@ private fun saveFileToDownloads(
     fileName: String,
     mimeHint: String,
 ): String {
+    val safeName = sanitizeDownloadFileName(fileName)
     val cleanMime = mimeHint.ifBlank { "application/octet-stream" }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+            put(MediaStore.Downloads.DISPLAY_NAME, safeName)
             put(MediaStore.Downloads.MIME_TYPE, cleanMime)
             put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/Oraculo")
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: error("Falha ao criar entrada em Downloads")
+            ?: error(tr("Falha ao criar entrada em Downloads", "Failed to create entry in Downloads"))
         try {
             resolver.openOutputStream(uri)?.use { out ->
                 sourceFile.inputStream().use { input ->
                     input.copyTo(out, bufferSize = 64 * 1024)
                 }
-            } ?: error("Falha ao abrir fluxo de destino em Downloads")
+            } ?: error(tr("Falha ao abrir destino em Downloads", "Failed to open destination stream in Downloads"))
 
             values.clear()
             values.put(MediaStore.Downloads.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
-            return "Downloads/Oraculo/$fileName"
+            return "Downloads/Oraculo/$safeName"
         } catch (err: Throwable) {
-            resolver.delete(uri, null, null)
+            runCatching { resolver.delete(uri, null, null) }
             throw err
         }
     }
@@ -1276,13 +1524,13 @@ private fun saveFileToDownloads(
         "Oraculo",
     )
     downloadsDir.mkdirs()
-    var target = File(downloadsDir, fileName)
+    var target = File(downloadsDir, safeName)
     if (target.exists()) {
-        val stem = fileName.substringBeforeLast('.', fileName)
-        val ext = fileName.substringAfterLast('.', "")
+        val stem = safeName.substringBeforeLast('.', safeName)
+        val ext = safeName.substringAfterLast('.', "")
         var idx = 1
         while (target.exists()) {
-            val nextName = if (ext.isNotEmpty() && fileName.contains('.')) {
+            val nextName = if (ext.isNotEmpty() && safeName.contains('.')) {
                 "$stem ($idx).$ext"
             } else {
                 "$stem ($idx)"
@@ -1315,12 +1563,17 @@ private fun launchExternalFileIntent(
         val send = Intent(Intent.ACTION_SEND).apply {
             type = effectiveMime
             putExtra(Intent.EXTRA_STREAM, uri)
+            clipData = ClipData.newRawUri("", uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        Intent.createChooser(send, "Enviar arquivo")
+        Intent.createChooser(send, tr("Compartilhar arquivo", "Share file")).apply {
+            clipData = ClipData.newRawUri("", uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
     } else {
         Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, effectiveMime)
+            clipData = ClipData.newRawUri("", uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
     }
@@ -1330,11 +1583,16 @@ private fun launchExternalFileIntent(
         if (!shareOnly) {
             val fallback = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "*/*")
+                clipData = ClipData.newRawUri("", uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(fallback, "Abrir arquivo com"))
+            val chooser = Intent.createChooser(fallback, tr("Abrir arquivo com", "Open file with")).apply {
+                clipData = ClipData.newRawUri("", uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(chooser)
         } else {
-            error("Nenhum aplicativo disponível para compartilhar este arquivo")
+            error(tr("Nenhum aplicativo disponível para compartilhar este arquivo", "No app available to share this file"))
         }
     }
 }
@@ -1349,13 +1607,10 @@ private fun formatFileSize(bytes: Long): String {
     return String.format(Locale.ROOT, "%.2f GB", gb)
 }
 
-private val FILE_DATE_FORMATTER = object : ThreadLocal<SimpleDateFormat>() {
-    override fun initialValue(): SimpleDateFormat =
-        SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
-}
-
 private fun formatUnixDate(epochSeconds: Long): String {
     if (epochSeconds <= 0L) return "--"
-    val formatter = FILE_DATE_FORMATTER.get() ?: SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
-    return formatter.format(Date(epochSeconds * 1000L))
+    val isPt = AppI18n.isPt
+    val pattern = if (isPt) "dd/MM HH:mm" else "MMM d, HH:mm"
+    val locale = if (isPt) Locale.forLanguageTag("pt-BR") else Locale.US
+    return SimpleDateFormat(pattern, locale).format(Date(epochSeconds * 1000L))
 }

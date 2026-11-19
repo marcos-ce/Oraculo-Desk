@@ -3,6 +3,8 @@ package com.oraculo.app
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import androidx.lifecycle.Lifecycle
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -47,9 +50,7 @@ import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
-import androidx.compose.material.icons.automirrored.filled.VolumeDown
-import androidx.compose.material.icons.automirrored.filled.VolumeOff
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
@@ -65,8 +66,8 @@ import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.TouchApp
@@ -103,20 +104,22 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
@@ -135,8 +138,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -151,6 +156,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.animation.AnimatedVisibility
@@ -167,18 +173,24 @@ import com.oraculo.app.ui.OraculoMotion
 import com.oraculo.app.ui.PtyxisPalette
 import com.oraculo.app.ui.oraculoPrimaryButtonColors
 import com.oraculo.app.ui.oraculoSegmentedButtonColors
+import com.oraculo.app.ui.oraculoSegmentedItemShape
 import com.oraculo.app.ui.ptyxisPaletteFor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.oraculo_mobile_core.CommandRunResult
+import uniffi.oraculo_mobile_core.HostStateObserver
 import uniffi.oraculo_mobile_core.InputObserver
+import uniffi.oraculo_mobile_core.MobileHostPermissions
+import uniffi.oraculo_mobile_core.MobileHostStateWatcher
 import uniffi.oraculo_mobile_core.MobileInputSession
 import uniffi.oraculo_mobile_core.MobileMouseButton
-import uniffi.oraculo_mobile_core.MobileRemoteKey
 import uniffi.oraculo_mobile_core.MobileTerminalSession
+import uniffi.oraculo_mobile_core.MobileTerminalSessionInfo
+import uniffi.oraculo_mobile_core.MobileTunnelSession
 import uniffi.oraculo_mobile_core.OraculoException
 import uniffi.oraculo_mobile_core.OraculoMobileClient
 import uniffi.oraculo_mobile_core.QuickCommandItem
@@ -188,6 +200,7 @@ import uniffi.oraculo_mobile_core.TerminalObserver
 import uniffi.oraculo_mobile_core.TerminalScreenSnapshot
 import uniffi.oraculo_mobile_core.TerminalSpan
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -200,6 +213,42 @@ internal fun formatOraculoError(error: Throwable): String {
     }
     val msg = error.message?.removePrefix("reason=")?.trim()
     return if (!msg.isNullOrEmpty()) msg else error.javaClass.simpleName
+}
+
+internal fun isPermanentRemoteError(raw: String): Boolean {
+    val low = raw.lowercase(java.util.Locale.ROOT)
+    return low.contains("bloqueada") ||
+        low.contains("locked") ||
+        low.contains("desativad") ||
+        low.contains("disabled") ||
+        low.contains("cancelad") ||
+        low.contains("canceled") ||
+        low.contains("cancelled") ||
+        low.contains("negad") ||
+        low.contains("denied") ||
+        low.contains("nenhum monitor") ||
+        low.contains("no monitor") ||
+        low.contains("no active monitor") ||
+        low.contains("no display") ||
+        low.contains("permiss") ||
+        low.contains("permission") ||
+        low.contains("revogad") ||
+        low.contains("revoked") ||
+        low.contains("não pareado") ||
+        low.contains("nao pareado") ||
+        low.contains("not paired") ||
+        low.contains("unpaired") ||
+        low.contains("acesso bloqueado") ||
+        low.contains("access blocked") ||
+        low.contains("[401]") ||
+        low.contains("[403]") ||
+        low.contains("[410]") ||
+        low.contains("[503]") ||
+        low.contains("decoder") ||
+        low.contains("mediacodec") ||
+        low.contains("não encontrada") ||
+        low.contains("nao encontrada") ||
+        low.contains("not found")
 }
 
 private enum class ControlTab(
@@ -243,14 +292,27 @@ internal fun Context.findActivity(): Activity? {
 fun HostControlScreen(
     client: OraculoMobileClient,
     host: SavedHostInfo,
+    bridges: List<SavedHostInfo> = emptyList(),
     onBack: () -> Unit,
+    onRemoteDisconnect: (String) -> Unit = { _ -> onBack() },
 ) {
     val context = LocalContext.current
     val lifecycleOwner = remember(context) { context.findLifecycleOwner() }
     val scope = rememberCoroutineScope()
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val focusManager = LocalFocusManager.current
     var selectedTab by remember { mutableStateOf(ControlTab.TOUCHPAD) }
     var visitedTabs by remember(host.endpointId) { mutableStateOf(setOf(ControlTab.TOUCHPAD)) }
+    var currentHost by remember(host) { mutableStateOf(host) }
+    var hostPermissions by remember(host.endpointId) { mutableStateOf<MobileHostPermissions?>(null) }
+    var stateWatchNonce by remember(host.endpointId) { mutableIntStateOf(0) }
+    val exitedRemotely = remember(host.endpointId) { AtomicBoolean(false) }
+    var consecutivePingFailures by remember(host.endpointId) { mutableIntStateOf(0) }
+    var isReconnecting by remember(host.endpointId) { mutableStateOf(false) }
+    var reconnectAttempt by remember(host.endpointId) { mutableIntStateOf(0) }
+    var connectionRestoredNonce by remember(host.endpointId) { mutableIntStateOf(0) }
+    var showWolDialog by remember(host.endpointId) { mutableStateOf(false) }
+    var showRdpTunnelDialog by remember(host.endpointId) { mutableStateOf(false) }
     var showRemoteKeyboard by remember { mutableStateOf(false) }
     var showTouchpadSettings by remember { mutableStateOf(false) }
     var isStreamingMode by remember(host.endpointId) { mutableStateOf(false) }
@@ -266,7 +328,7 @@ fun HostControlScreen(
 
     HostSessionNotificationEffect(
         client = client,
-        host = host,
+        host = currentHost,
         modeLabel = if (isStreamingMode) tr("Espelhamento de tela", "Screen mirroring") else selectedTab.label,
         onDisconnectRequested = onBack,
     )
@@ -284,23 +346,258 @@ fun HostControlScreen(
         }
     }
 
+    fun dispatchRemoteDisconnect(message: String) {
+        if (exitedRemotely.compareAndSet(false, true)) {
+            onRemoteDisconnect(message)
+        }
+    }
+
+    DisposableEffect(host.endpointId, isAppStarted, stateWatchNonce) {
+        if (!isAppStarted || exitedRemotely.get()) {
+            return@DisposableEffect onDispose {}
+        }
+        val active = AtomicBoolean(true)
+        val watcherRef = AtomicReference<MobileHostStateWatcher?>(null)
+        var reconnectJob: kotlinx.coroutines.Job? = null
+
+        val observer = object : HostStateObserver {
+            override fun onState(hostName: String, permissions: MobileHostPermissions) {
+                mainHandler.post {
+                    if (!active.get() || exitedRemotely.get()) return@post
+                    val wasDisconnected = isConnected == false || isReconnecting
+                    hostPermissions = permissions
+                    isConnected = true
+                    isReconnecting = false
+                    reconnectAttempt = 0
+                    consecutivePingFailures = 0
+                    if (hostName.isNotBlank() && hostName != currentHost.hostName) {
+                        currentHost = currentHost.copy(hostName = hostName)
+                    }
+                    if (wasDisconnected) {
+                        connectionRestoredNonce += 1
+                    }
+                }
+            }
+
+            override fun onDisconnected(code: UInt, reason: String) {
+                mainHandler.post {
+                    if (!active.get() || exitedRemotely.get()) return@post
+                    when (code) {
+                        401u, 403u -> dispatchRemoteDisconnect(
+                            tr(
+                                "Acesso removido no computador. Pareie novamente.",
+                                "Access removed on computer. Please pair again.",
+                            ),
+                        )
+                        410u -> dispatchRemoteDisconnect(
+                            tr(
+                                "Sessão desconectada no computador.",
+                                "Session disconnected on computer.",
+                            ),
+                        )
+                        503u -> dispatchRemoteDisconnect(
+                            tr(
+                                "O Oráculo foi encerrado no computador.",
+                                "Oráculo was closed on computer.",
+                            ),
+                        )
+                        else -> {
+                            isConnected = false
+                            latencyMs = null
+                            isReconnecting = true
+                            if (reconnectJob?.isActive == true) return@post
+                            val backoffMs = listOf(900L, 2000L, 3500L, 5000L, 7000L)[
+                                reconnectAttempt.coerceAtMost(4)
+                            ]
+                            reconnectJob = scope.launch {
+                                delay(backoffMs)
+                                if (!active.get() || exitedRemotely.get()) return@launch
+                                val probe = withContext(Dispatchers.IO) {
+                                    runCatching { client.connectAndVerify(host.endpointId, 9000uL) }
+                                }
+                                if (!active.get() || exitedRemotely.get()) return@launch
+                                probe.onSuccess {
+                                    reconnectAttempt = 0
+                                    stateWatchNonce += 1
+                                }.onFailure { err ->
+                                    val raw = formatOraculoError(err)
+                                    when {
+                                        raw.startsWith("[401]") || raw.startsWith("[403]") ->
+                                            dispatchRemoteDisconnect(
+                                                tr(
+                                                    "Acesso removido no computador. Pareie novamente.",
+                                                    "Access removed on computer. Please pair again.",
+                                                ),
+                                            )
+                                        raw.startsWith("[503]") ->
+                                            dispatchRemoteDisconnect(
+                                                tr(
+                                                    "O Oráculo foi encerrado no computador.",
+                                                    "Oráculo was closed on computer.",
+                                                ),
+                                            )
+                                        else -> {
+                                            reconnectAttempt += 1
+                                            stateWatchNonce += 1
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        val job = CoroutineScope(Dispatchers.IO).launch {
+            val res = runCatching { client.watchHostState(host.endpointId, observer) }
+            if (!active.get() || exitedRemotely.get()) {
+                res.onSuccess { w ->
+                    runCatching {
+                        w.closeWatcher()
+                        w.close()
+                    }
+                }
+                return@launch
+            }
+            res.onSuccess { watcher ->
+                watcherRef.set(watcher)
+            }
+            var retryBackoffMs: Long? = null
+            withContext(Dispatchers.Main + NonCancellable) {
+                if (!active.get() || exitedRemotely.get()) {
+                    val toClose = watcherRef.getAndSet(null)
+                    if (toClose != null) {
+                        CoroutineScope(Dispatchers.IO).launch {
+                            runCatching {
+                                toClose.closeWatcher()
+                                toClose.close()
+                            }
+                        }
+                    }
+                    return@withContext
+                }
+                res.onFailure { err ->
+                    val raw = formatOraculoError(err)
+                    when {
+                        raw.startsWith("[401]") || raw.startsWith("[403]") -> {
+                            dispatchRemoteDisconnect(
+                                tr(
+                                    "Acesso removido no computador. Pareie novamente.",
+                                    "Access removed on computer. Please pair again.",
+                                ),
+                            )
+                        }
+                        raw.startsWith("[503]") -> {
+                            dispatchRemoteDisconnect(
+                                tr(
+                                    "O Oráculo foi encerrado no computador.",
+                                    "Oráculo was closed on computer.",
+                                ),
+                            )
+                        }
+                        else -> {
+                            isConnected = false
+                            latencyMs = null
+                            isReconnecting = true
+                            retryBackoffMs = listOf(1200L, 2500L, 4000L, 6000L, 8000L)[
+                                reconnectAttempt.coerceAtMost(4)
+                            ]
+                        }
+                    }
+                }
+            }
+            val backoffMs = retryBackoffMs
+            if (backoffMs != null && active.get() && !exitedRemotely.get()) {
+                delay(backoffMs)
+                withContext(Dispatchers.Main) {
+                    if (active.get() && !exitedRemotely.get()) {
+                        reconnectAttempt += 1
+                        stateWatchNonce += 1
+                    }
+                }
+            }
+        }
+
+        onDispose {
+            active.set(false)
+            job.cancel()
+            reconnectJob?.cancel()
+            reconnectJob = null
+            val toClose = watcherRef.getAndSet(null)
+            if (toClose != null) {
+                CoroutineScope(Dispatchers.IO).launch {
+                    runCatching {
+                        toClose.closeWatcher()
+                        toClose.close()
+                    }
+                }
+            }
+        }
+    }
+
     suspend fun performPing(showSpinner: Boolean) {
         val gen = ++pingGeneration
         if (showSpinner || isConnected != true) {
             isPinging = true
         }
-        val result = withContext(Dispatchers.IO) {
-            runCatching { client.ping(host.endpointId) }
-        }
-        if (gen == pingGeneration) {
-            result.onSuccess { ping ->
-                isConnected = true
-                latencyMs = ping.rttMs
-            }.onFailure {
-                isConnected = false
-                latencyMs = null
+        try {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val ping = client.ping(host.endpointId)
+                    val synced = runCatching {
+                        client.listSavedHosts().firstOrNull { it.endpointId == host.endpointId }
+                    }.getOrNull()
+                    ping to synced
+                }
             }
-            isPinging = false
+            if (gen == pingGeneration) {
+                result.onSuccess { (ping, synced) ->
+                    val wasDisconnected = isConnected == false || isReconnecting
+                    isConnected = true
+                    isReconnecting = false
+                    reconnectAttempt = 0
+                    consecutivePingFailures = 0
+                    latencyMs = ping.rttMs
+                    if (synced != null) {
+                        currentHost = synced
+                    }
+                    if (wasDisconnected) {
+                        connectionRestoredNonce += 1
+                        stateWatchNonce += 1
+                    }
+                }.onFailure { err ->
+                    isConnected = false
+                    latencyMs = null
+                    consecutivePingFailures += 1
+                    val raw = formatOraculoError(err)
+                    when {
+                        raw.startsWith("[401]") || raw.startsWith("[403]") -> {
+                            dispatchRemoteDisconnect(
+                                tr(
+                                    "Acesso removido no computador. Pareie novamente.",
+                                    "Access removed on computer. Please pair again.",
+                                ),
+                            )
+                        }
+                        raw.startsWith("[503]") -> {
+                            dispatchRemoteDisconnect(
+                                tr(
+                                    "O Oráculo foi encerrado no computador.",
+                                    "Oráculo was closed on computer.",
+                                ),
+                            )
+                        }
+                        else -> {
+                            isReconnecting = true
+                        }
+                    }
+                }
+            }
+        } finally {
+            if (gen == pingGeneration) {
+                isPinging = false
+            }
         }
     }
 
@@ -318,6 +615,27 @@ fun HostControlScreen(
         while (true) {
             delay(5000L)
             performPing(showSpinner = false)
+        }
+    }
+
+    LaunchedEffect(host.endpointId, isAppStarted) {
+        var skipFirst = true
+        OraculoSessionCoordinator.networkChangeNonce.collect {
+            if (skipFirst) {
+                skipFirst = false
+                return@collect
+            }
+            consecutivePingFailures = 0
+            reconnectAttempt = 0
+            delay(350L)
+            if (isAppStarted) {
+                if (isConnected != true || isReconnecting) {
+                    stateWatchNonce += 1
+                }
+                if (!isStreamingMode) {
+                    performPing(showSpinner = isConnected != true)
+                }
+            }
         }
     }
 
@@ -355,12 +673,13 @@ fun HostControlScreen(
             IconButton(onClick = onBack) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Voltar",
+                    contentDescription = tr("Voltar", "Back"),
                     tint = OraculoColors.OnSurface,
                 )
             }
 
             val statusSubtitle = when {
+                isReconnecting -> tr("Reconectando...", "Reconnecting...")
                 isPinging && (isConnected != true || latencyMs == null) -> tr("Testando conexão...", "Checking connection...")
                 isConnected == true && latencyMs == 0uL -> "<1 ms · Online"
                 isConnected == true && latencyMs != null -> "${latencyMs} ms · Online"
@@ -375,7 +694,7 @@ fun HostControlScreen(
                     .padding(horizontal = 6.dp, vertical = 4.dp),
             ) {
                 Text(
-                    text = host.hostName,
+                    text = currentHost.hostName,
                     style = MaterialTheme.typography.titleLarge,
                     fontSize = 19.sp,
                     color = OraculoColors.OnSurface,
@@ -396,6 +715,39 @@ fun HostControlScreen(
             }
 
             AnimatedVisibility(
+                visible = hostPermissions?.allowRdpTunnel != false,
+                enter = OraculoMotion.ExpandH,
+                exit = OraculoMotion.CollapseH,
+            ) {
+                IconButton(onClick = { showRdpTunnelDialog = true }) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = tr("Login remoto (RDP)", "Remote login (RDP)"),
+                        tint = OraculoColors.OnSurfaceMuted,
+                    )
+                }
+            }
+
+            AnimatedVisibility(
+                visible = isConnected == false,
+                enter = OraculoMotion.ExpandH,
+                exit = OraculoMotion.CollapseH,
+            ) {
+                FilledTonalIconButton(
+                    onClick = { showWolDialog = true },
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = OraculoColors.SecondaryContainer,
+                        contentColor = OraculoColors.OnSecondaryContainer,
+                    ),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PowerSettingsNew,
+                        contentDescription = tr("Ligar computador", "Wake computer"),
+                    )
+                }
+            }
+
+            AnimatedVisibility(
                 visible = selectedTab == ControlTab.TOUCHPAD,
                 enter = OraculoMotion.ExpandH,
                 exit = OraculoMotion.CollapseH,
@@ -410,14 +762,14 @@ fun HostControlScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Tune,
-                            contentDescription = "Ajustes do touchpad",
+                            contentDescription = tr("Ajustes do touchpad", "Touchpad settings"),
                         )
                     }
                 } else {
                     IconButton(onClick = { showTouchpadSettings = true }) {
                         Icon(
                             imageVector = Icons.Default.Tune,
-                            contentDescription = "Ajustes do touchpad",
+                            contentDescription = tr("Ajustes do touchpad", "Touchpad settings"),
                             tint = OraculoColors.OnSurfaceMuted,
                         )
                     }
@@ -431,6 +783,59 @@ fun HostControlScreen(
             modifier = Modifier.fillMaxWidth(),
         )
 
+        AnimatedVisibility(
+            visible = isReconnecting && !isStreamingMode,
+            enter = OraculoMotion.ExpandV,
+            exit = OraculoMotion.CollapseV,
+        ) {
+            Surface(
+                color = OraculoColors.SurfaceRecessed,
+                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = OraculoColors.Primary,
+                    )
+                    Text(
+                        text = tr(
+                            "Conexão instável · reconectando...",
+                            "Connection unstable · reconnecting...",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = OraculoColors.OnSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = {
+                            reconnectAttempt = 0
+                            consecutivePingFailures = 0
+                            stateWatchNonce += 1
+                            refreshPing(manual = true)
+                        },
+                    ) {
+                        Text(
+                            text = tr("Tentar agora", "Retry now"),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = OraculoColors.Primary,
+                        )
+                    }
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(6.dp))
 
         KeepAliveControlTabs(
@@ -441,29 +846,38 @@ fun HostControlScreen(
             when (tab) {
                 ControlTab.TOUCHPAD -> TouchpadTab(
                     client = client,
-                    host = host,
+                    host = currentHost,
+                    isActive = selectedTab == ControlTab.TOUCHPAD && !isStreamingMode,
                     showKeyboardBar = showRemoteKeyboard,
                     showSettingsBar = showTouchpadSettings,
                     onToggleKeyboardBar = { showRemoteKeyboard = !showRemoteKeyboard },
                     onOpenScreenStream = { isStreamingMode = true },
                     isPaused = isStreamingMode,
+                    allowInput = hostPermissions?.allowInput,
+                    connectionRestoredNonce = connectionRestoredNonce,
                     modifier = Modifier.fillMaxSize(),
                 )
                 ControlTab.TERMINAL -> TerminalTab(
                     client = client,
-                    host = host,
+                    host = currentHost,
                     isActive = selectedTab == ControlTab.TERMINAL && !isStreamingMode,
+                    allowTerminal = hostPermissions?.allowTerminal,
+                    connectionRestoredNonce = connectionRestoredNonce,
                     modifier = Modifier.fillMaxSize(),
                 )
                 ControlTab.COMMANDS -> CommandsTab(
                     client = client,
-                    host = host,
+                    host = currentHost,
+                    allowCommandsRun = hostPermissions?.allowCommandsRun,
+                    allowCommandsEdit = hostPermissions?.allowCommandsEdit,
                     modifier = Modifier.fillMaxSize(),
                 )
                 ControlTab.FILES -> FilesTab(
                     client = client,
-                    host = host,
-                    isActive = selectedTab == ControlTab.FILES,
+                    host = currentHost,
+                    isActive = selectedTab == ControlTab.FILES && !isStreamingMode,
+                    allowFilesRead = hostPermissions?.allowFilesRead,
+                    allowFilesWrite = hostPermissions?.allowFilesWrite,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -477,11 +891,41 @@ fun HostControlScreen(
         ) {
             ScreenStreamingScreen(
                 client = client,
-                host = host,
+                host = currentHost,
+                allowScreen = hostPermissions?.allowScreen,
+                allowInput = hostPermissions?.allowInput,
+                allowRdpTunnel = hostPermissions?.allowRdpTunnel ?: true,
+                connectionRestoredNonce = connectionRestoredNonce,
+                onOpenRdpTunnel = { showRdpTunnelDialog = true },
                 onExit = { isStreamingMode = false },
             )
         }
+
+        if (showRdpTunnelDialog) {
+            RdpTunnelDialog(
+                client = client,
+                host = currentHost,
+                allowRdpTunnel = hostPermissions?.allowRdpTunnel ?: true,
+                onDismiss = { showRdpTunnelDialog = false },
+            )
+        }
+
+        if (showWolDialog) {
+            WakeOnLanDialog(
+                client = client,
+                host = currentHost,
+                bridges = bridges,
+                onHostUpdated = { updated -> currentHost = updated },
+                onHostOnline = { online ->
+                    currentHost = online
+                    showWolDialog = false
+                    refreshPing(manual = true)
+                },
+                onDismiss = { showWolDialog = false },
+            )
+        }
     }
+
 }
 
 @Composable
@@ -512,6 +956,7 @@ private fun KeepAliveControlTabs(
             placeable?.placeRelative(0, 0)
         }
     }
+
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -544,7 +989,7 @@ private fun ControlTabRow(
                 ) {
                     Icon(
                         imageVector = tab.icon,
-                        contentDescription = tab.label,
+                        contentDescription = null,
                         modifier = Modifier.size(18.dp),
                     )
                     Text(
@@ -560,17 +1005,21 @@ private fun ControlTabRow(
             }
         }
     }
+
 }
 
 @Composable
 private fun TouchpadTab(
     client: OraculoMobileClient,
     host: SavedHostInfo,
+    isActive: Boolean = true,
     showKeyboardBar: Boolean,
     showSettingsBar: Boolean,
     onToggleKeyboardBar: () -> Unit,
     onOpenScreenStream: () -> Unit,
     isPaused: Boolean = false,
+    allowInput: Boolean? = null,
+    connectionRestoredNonce: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -621,15 +1070,16 @@ private fun TouchpadTab(
             autoRetryAttempts = 0
             pendingReconnectDelayMs = 0L
         } else {
-            if (autoRetryAttempts >= 3) {
+            if (autoRetryAttempts >= 5) {
                 inputSession = null
                 isConnecting = false
-                errorMsg = tr("Conexão do touchpad encerrada por inatividade.", "Touchpad connection closed due to inactivity.")
+                errorMsg = tr("Touchpad desconectado. Toque para reconectar.", "Touchpad disconnected. Tap to reconnect.")
                 keyboardController.releaseAllModifiers(null)
                 return
             }
+            val backoffSchedule = listOf(350L, 900L, 1800L, 3000L, 4500L)
+            pendingReconnectDelayMs = backoffSchedule[autoRetryAttempts.coerceAtMost(backoffSchedule.lastIndex)]
             autoRetryAttempts += 1
-            pendingReconnectDelayMs = if (autoRetryAttempts == 1) 250L else 850L
         }
         inputSession = null
         errorMsg = null
@@ -639,8 +1089,27 @@ private fun TouchpadTab(
     }
     triggerReconnectRef = ::triggerReconnect
 
+    LaunchedEffect(connectionRestoredNonce, isPaused) {
+        if (connectionRestoredNonce == 0 || isPaused || allowInput == false) return@LaunchedEffect
+        val current = inputSession
+        val currentError = errorMsg
+        val blockedByPolicy = currentError != null && isPermanentRemoteError(currentError)
+        if (!blockedByPolicy && ((current == null && !isConnecting) || (current != null && !current.isAlive()))) {
+            triggerReconnect(
+                resetAttempts = true,
+                hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."),
+            )
+        }
+    }
+
     fun sendOnSession(target: MobileInputSession?, action: (MobileInputSession) -> Unit): Boolean =
         keyboardController.sendOnSession(target, action)
+
+    LaunchedEffect(isActive, isPaused) {
+        if (!isActive || isPaused) {
+            keyboardController.releaseAllModifiers(inputSession)
+        }
+    }
 
     val currentIsPaused by rememberUpdatedState(isPaused)
     val lifecycleOwner = remember(context) { context.findLifecycleOwner() }
@@ -650,7 +1119,7 @@ private fun TouchpadTab(
             if (event == Lifecycle.Event.ON_RESUME && !currentIsPaused) {
                 val current = inputSession
                 if ((current == null && !isConnecting) || (current != null && !current.isAlive())) {
-                    triggerReconnect(resetAttempts = true, hint = "Reconectando touchpad...")
+                    triggerReconnect(resetAttempts = true, hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."))
                 }
             }
         }
@@ -669,6 +1138,36 @@ private fun TouchpadTab(
         }
     }
 
+    val currentAllowInput by rememberUpdatedState(allowInput)
+
+    LaunchedEffect(allowInput, isPaused) {
+        if (allowInput == false) {
+            val prev = inputSession
+            keyboardController.releaseAllModifiers(prev)
+            inputSession = null
+            isConnecting = false
+            autoRetryAttempts = 0
+            pendingReconnectDelayMs = 0L
+            errorMsg = tr("Mouse e teclado desativados no computador.", "Mouse and keyboard disabled on computer.")
+            if (prev != null) {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        prev.closeSession()
+                        prev.close()
+                    }
+                }
+            }
+        } else if (allowInput == true && !isPaused) {
+            val current = inputSession
+            if ((current == null && !isConnecting) || (current != null && !current.isAlive())) {
+                triggerReconnect(
+                    resetAttempts = true,
+                    hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."),
+                )
+            }
+        }
+    }
+
     DisposableEffect(host.endpointId, reconnectNonce, isPaused) {
         if (isPaused) {
             resumeAfterPause = true
@@ -676,8 +1175,13 @@ private fun TouchpadTab(
             errorMsg = null
             return@DisposableEffect onDispose {}
         }
-        var active = true
-        var createdSession: MobileInputSession? = null
+        if (currentAllowInput == false) {
+            isConnecting = false
+            errorMsg = tr("Mouse e teclado desativados no computador.", "Mouse and keyboard disabled on computer.")
+            return@DisposableEffect onDispose {}
+        }
+        val active = AtomicBoolean(true)
+        val sessionRef = AtomicReference<MobileInputSession?>(null)
         val resumeDelay = if (resumeAfterPause) {
             resumeAfterPause = false
             190L
@@ -695,10 +1199,10 @@ private fun TouchpadTab(
 
         val hintJob = CoroutineScope(Dispatchers.Main).launch {
             delay(1300)
-            if (active && isConnecting) {
+            if (active.get() && isConnecting) {
                 connectHint = tr(
-                    "Se aparecer aviso no Fedora, clique em Compartilhar",
-                    "If prompted on the PC, click Share to allow remote input",
+                    "Se aparecer um pedido no computador, clique em Compartilhar.",
+                    "If prompted on your computer, click Share.",
                 )
             }
         }
@@ -706,10 +1210,18 @@ private fun TouchpadTab(
         val inputObserver = object : InputObserver {
             override fun onSessionClosed(reason: String) {
                 mainHandler.post {
-                    if (!active) return@post
-                    if (createdSession != null && inputSession === createdSession) {
-                        createdSession = null
-                        triggerReconnect(resetAttempts = false, hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."))
+                    if (!active.get()) return@post
+                    val tracked = sessionRef.get()
+                    if (tracked != null && inputSession === tracked) {
+                        sessionRef.compareAndSet(tracked, null)
+                        if (currentAllowInput == false) {
+                            inputSession = null
+                            isConnecting = false
+                            autoRetryAttempts = 0
+                            errorMsg = tr("Mouse e teclado desativados no computador.", "Mouse and keyboard disabled on computer.")
+                        } else {
+                            triggerReconnect(resetAttempts = false, hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."))
+                        }
                     }
                 }
             }
@@ -719,15 +1231,28 @@ private fun TouchpadTab(
             if (waitBeforeConnectMs > 0L) {
                 delay(waitBeforeConnectMs)
             }
-            if (!active) return@launch
+            if (!active.get()) return@launch
             val result = runCatching { client.openInput(host.endpointId, inputObserver) }
-            withContext(Dispatchers.Main) {
-                if (!active) {
-                    result.onSuccess { s ->
+            if (!active.get()) {
+                result.onSuccess { s ->
+                    runCatching {
+                        s.closeSession()
+                        s.close()
+                    }
+                }
+                return@launch
+            }
+            result.onSuccess { created ->
+                sessionRef.set(created)
+            }
+            withContext(Dispatchers.Main + NonCancellable) {
+                if (!active.get()) {
+                    val toClose = sessionRef.getAndSet(null)
+                    if (toClose != null) {
                         CoroutineScope(Dispatchers.IO).launch {
                             runCatching {
-                                s.closeSession()
-                                s.close()
+                                toClose.closeSession()
+                                toClose.close()
                             }
                         }
                     }
@@ -737,24 +1262,24 @@ private fun TouchpadTab(
                 result.onSuccess { created ->
                     isConnecting = false
                     pendingReconnectDelayMs = 0L
-                    createdSession = created
                     inputSession = created
                 }.onFailure { err ->
-                    if (autoRetryAttempts in 1 until 3) {
-                        triggerReconnect(resetAttempts = false, hint = "Reconectando touchpad...")
+                    val msg = formatOraculoError(err)
+                    if (!isPermanentRemoteError(msg) && autoRetryAttempts < 5) {
+                        triggerReconnect(resetAttempts = false, hint = tr("Reconectando touchpad...", "Reconnecting touchpad..."))
                     } else {
                         isConnecting = false
-                        errorMsg = formatOraculoError(err)
+                        errorMsg = msg
                     }
                 }
             }
         }
 
         onDispose {
-            active = false
+            active.set(false)
             hintJob.cancel()
             openJob.cancel()
-            val toClose = createdSession ?: inputSession
+            val toClose = sessionRef.getAndSet(null) ?: inputSession
             keyboardController.releaseAllModifiers(toClose)
             inputSession = null
             if (toClose != null) {
@@ -962,6 +1487,96 @@ private fun TouchpadSettingsDrawer(
             }
         }
     }
+
+}
+
+/**
+ * Filtro 1-Euro (low-pass adaptativo por velocidade) com acumulador de subpixel para atenuar
+ * tremor natural da mão e ruído capacitivo em movimentos lentos sem atrasar arrastes rápidos.
+ */
+internal class TouchpadNoiseFilter(
+    density: Float,
+    private val minCutoffHz: Double = 1.6,
+    private val beta: Double = 0.032,
+    private val dCutoffHz: Double = 1.0,
+    deadbandDp: Double = 0.22,
+) {
+    private val pxPerDp = density.coerceAtLeast(1f).toDouble()
+    private val deadbandPx = deadbandDp * pxPerDp
+    private var initialized = false
+    private var rawX = 0.0
+    private var rawY = 0.0
+    private var filtX = 0.0
+    private var filtY = 0.0
+    private var prevRawX = 0.0
+    private var prevRawY = 0.0
+    private var edx = 0.0
+    private var edy = 0.0
+    private var emittedX = 0.0
+    private var emittedY = 0.0
+    private var lastUptimeMs = 0L
+
+    data class FilteredDelta(
+        val dx: Double,
+        val dy: Double,
+        val speedDpPerSec: Double,
+    )
+
+    fun reset(uptimeMs: Long) {
+        initialized = true
+        rawX = 0.0
+        rawY = 0.0
+        filtX = 0.0
+        filtY = 0.0
+        prevRawX = 0.0
+        prevRawY = 0.0
+        edx = 0.0
+        edy = 0.0
+        emittedX = 0.0
+        emittedY = 0.0
+        lastUptimeMs = uptimeMs
+    }
+
+    fun step(deltaPxX: Float, deltaPxY: Float, uptimeMs: Long): FilteredDelta {
+        if (!initialized) reset(uptimeMs)
+        rawX += deltaPxX
+        rawY += deltaPxY
+
+        val dtSec = ((uptimeMs - lastUptimeMs).coerceIn(1L, 100L)) / 1000.0
+        lastUptimeMs = uptimeMs
+
+        val vx = ((rawX - prevRawX) / pxPerDp) / dtSec
+        val vy = ((rawY - prevRawY) / pxPerDp) / dtSec
+        prevRawX = rawX
+        prevRawY = rawY
+
+        val alphaD = smoothingAlpha(dtSec, dCutoffHz)
+        edx += alphaD * (vx - edx)
+        edy += alphaD * (vy - edy)
+
+        val speedDp = hypot(edx, edy)
+        val cutoff = minCutoffHz + beta * speedDp
+        val alpha = smoothingAlpha(dtSec, cutoff)
+        filtX += alpha * (rawX - filtX)
+        filtY += alpha * (rawY - filtY)
+
+        val outDx = filtX - emittedX
+        val outDy = filtY - emittedY
+        val outDist = hypot(outDx, outDy)
+
+        if (outDist < deadbandPx && speedDp < 18.0) {
+            return FilteredDelta(0.0, 0.0, speedDp)
+        }
+
+        emittedX = filtX
+        emittedY = filtY
+        return FilteredDelta(outDx, outDy, speedDp)
+    }
+
+    private fun smoothingAlpha(dtSec: Double, cutoffHz: Double): Double {
+        val tau = 1.0 / (2.0 * kotlin.math.PI * cutoffHz)
+        return 1.0 / (1.0 + tau / dtSec)
+    }
 }
 
 @Composable
@@ -981,6 +1596,8 @@ internal fun TouchpadSurface(
     compactMode: Boolean = false,
 ) {
     val haptic = LocalHapticFeedback.current
+    val touchDensity = LocalDensity.current.density
+    val noiseFilter = remember(touchDensity) { TouchpadNoiseFilter(touchDensity) }
     var hasTouched by remember { mutableStateOf(false) }
     var touchSpot by remember { mutableStateOf<Offset?>(null) }
     var touchActive by remember { mutableStateOf(false) }
@@ -1010,24 +1627,39 @@ internal fun TouchpadSurface(
             .onFailure { currentOnSessionBroken(session) }
             .isSuccess
 
-    val cornerShape = RoundedCornerShape(if (compactMode) 16.dp else 22.dp)
+    val cornerShape = RoundedCornerShape(
+        if (compactMode) OraculoMetrics.CornerLarge else OraculoMetrics.CornerSurface,
+    )
 
     Box(
         modifier = modifier
             .clip(cornerShape)
             .background(OraculoColors.Surface)
             .border(1.dp, OraculoColors.Outline, cornerShape)
-            .pointerInput(inputSession) {
+            .pointerInput(inputSession, compactMode, touchDensity) {
                 val activeSession = inputSession ?: return@pointerInput
                 var lastLeftTapUpMs = 0L
+                var lastLeftTapPos: Offset? = null
+                var consecutiveLeftTaps = 0
+                val tapDriftHoldPx = 7.0f * touchDensity
+                val rapidTapDriftHoldPx = 8.5f * touchDensity
+
                 awaitEachGesture {
                     val firstDown = awaitFirstDown(requireUnconsumed = false)
                     hasTouched = true
                     touchSpot = firstDown.position
                     touchActive = true
+                    noiseFilter.reset(firstDown.uptimeMillis)
                     val gestureStartMs = System.currentTimeMillis()
-                    val isPotentialDrag = (gestureStartMs - lastLeftTapUpMs) <= 280L
+                    val prevTapPos = lastLeftTapPos
+                    val dtSinceTap = gestureStartMs - lastLeftTapUpMs
+                    val isRapidFollowUp = prevTapPos != null && dtSinceTap in 20L..380L
+                    val effectiveTapHoldPx = if (isRapidFollowUp) rapidTapDriftHoldPx else tapDriftHoldPx
+                    var dragCandidate = prevTapPos != null &&
+                        dtSinceTap in 25L..260L &&
+                        (firstDown.position - prevTapPos).getDistance() <= viewConfiguration.touchSlop * 1.85f
                     var isDragging = false
+                    var pointerMoved = false
                     var maxPointers = 1
                     var totalMove = 0f
 
@@ -1036,6 +1668,9 @@ internal fun TouchpadSurface(
                             val event = awaitPointerEvent()
                             val pressed = event.changes.filter { it.pressed }
                             maxPointers = maxOf(maxPointers, pressed.size)
+                            if (maxPointers >= 2) {
+                                dragCandidate = false
+                            }
                             if (pressed.isNotEmpty()) {
                                 touchSpot = pressed[0].position
                             }
@@ -1049,10 +1684,26 @@ internal fun TouchpadSurface(
                                     }
                                     isDragging = false
                                     lastLeftTapUpMs = 0L
+                                    lastLeftTapPos = null
+                                    consecutiveLeftTaps = 0
                                     currentDisarmArmed()
                                     currentPublishTelemetry(tr("solto", "released"), 0L)
                                 } else if (wentUpCount > 0) {
-                                    if (maxPointers >= 2) {
+                                    if (maxPointers >= 3) {
+                                        if (totalMove < viewConfiguration.touchSlop * 2.6f && elapsed < 360L) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            if (sendOrReport(activeSession) {
+                                                    activeSession.clickButton(MobileMouseButton.MIDDLE)
+                                                }
+                                            ) {
+                                                currentDisarmArmed()
+                                                currentPublishTelemetry(tr("botão do meio", "middle click"), 0L)
+                                            }
+                                        }
+                                        lastLeftTapUpMs = 0L
+                                        lastLeftTapPos = null
+                                        consecutiveLeftTaps = 0
+                                    } else if (maxPointers == 2) {
                                         if (totalMove < viewConfiguration.touchSlop * 2.2f && elapsed < 320L) {
                                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                             if (sendOrReport(activeSession) {
@@ -1064,18 +1715,38 @@ internal fun TouchpadSurface(
                                             }
                                         }
                                         lastLeftTapUpMs = 0L
-                                    } else if (totalMove < viewConfiguration.touchSlop) {
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        if (sendOrReport(activeSession) {
-                                                activeSession.clickButton(MobileMouseButton.LEFT)
-                                            }
-                                        ) {
-                                            currentDisarmArmed()
-                                            lastLeftTapUpMs = System.currentTimeMillis()
-                                            currentPublishTelemetry(tr("clique", "click"), 0L)
-                                        }
+                                        lastLeftTapPos = null
+                                        consecutiveLeftTaps = 0
                                     } else {
-                                        lastLeftTapUpMs = 0L
+                                        val isTap = !pointerMoved && elapsed < 300L
+                                        if (isTap) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            if (sendOrReport(activeSession) {
+                                                    activeSession.clickButton(MobileMouseButton.LEFT)
+                                                }
+                                            ) {
+                                                val nowMs = System.currentTimeMillis()
+                                                val multiDt = nowMs - lastLeftTapUpMs
+                                                consecutiveLeftTaps = if (multiDt in 20L..380L) {
+                                                    consecutiveLeftTaps + 1
+                                                } else {
+                                                    1
+                                                }
+                                                currentDisarmArmed()
+                                                lastLeftTapUpMs = nowMs
+                                                lastLeftTapPos = firstDown.position
+                                                val label = if (consecutiveLeftTaps >= 2) {
+                                                    tr("${consecutiveLeftTaps}× clique", "${consecutiveLeftTaps}× click")
+                                                } else {
+                                                    tr("clique", "click")
+                                                }
+                                                currentPublishTelemetry(label, 0L)
+                                            }
+                                        } else {
+                                            lastLeftTapUpMs = 0L
+                                            lastLeftTapPos = null
+                                            consecutiveLeftTaps = 0
+                                        }
                                     }
                                 }
                                 break
@@ -1084,26 +1755,59 @@ internal fun TouchpadSurface(
                             if (pressed.size == 1 && maxPointers == 1) {
                                 val change = pressed[0]
                                 val delta = change.positionChange()
-                                if (abs(delta.x) > 0.25f || abs(delta.y) > 0.25f) {
-                                    val stepDist = delta.getDistance()
-                                    totalMove += stepDist
-                                    if (!isDragging && isPotentialDrag && totalMove >= viewConfiguration.touchSlop * 0.5f) {
-                                        isDragging = true
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        sendOrReport(activeSession) {
-                                            activeSession.pressButton(MobileMouseButton.LEFT, true)
+                                if (abs(delta.x) > 0.01f || abs(delta.y) > 0.01f) {
+                                    val rawDisplacement = (change.position - firstDown.position).getDistance()
+                                    val holdElapsed = System.currentTimeMillis() - gestureStartMs
+
+                                    if (dragCandidate && !isDragging) {
+                                        if (holdElapsed < 65L && rawDisplacement > viewConfiguration.touchSlop * 1.25f) {
+                                            // Movimento rápido logo após um clique é reposicionamento do cursor, não arrasto.
+                                            dragCandidate = false
+                                        } else if (
+                                            (holdElapsed >= 90L && rawDisplacement >= effectiveTapHoldPx) ||
+                                            (holdElapsed >= 65L && rawDisplacement >= viewConfiguration.touchSlop * 0.95f)
+                                        ) {
+                                            isDragging = true
+                                            dragCandidate = false
+                                            pointerMoved = true
+                                            noiseFilter.reset(change.uptimeMillis)
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            sendOrReport(activeSession) {
+                                                activeSession.pressButton(MobileMouseButton.LEFT, true)
+                                            }
                                         }
                                     }
-                                    val boost = 1.0 + (stepDist / 48.0).coerceAtMost(0.5)
-                                    val sx = delta.x * currentPointerSpeed * boost
-                                    val sy = delta.y * currentPointerSpeed * boost
-                                    sendOrReport(activeSession) {
-                                        activeSession.movePointer(sx, sy)
+
+                                    // Segura micro-deslizamentos iniciais durante toques rápidos para que
+                                    // duplo e triplo clique caiam exatamente no mesmo pixel sem arrastar o cursor.
+                                    if (!pointerMoved) {
+                                        if (
+                                            rawDisplacement > effectiveTapHoldPx ||
+                                            (holdElapsed >= 160L && rawDisplacement > 2.5f * touchDensity)
+                                        ) {
+                                            pointerMoved = true
+                                            noiseFilter.reset(change.uptimeMillis)
+                                        } else {
+                                            change.consume()
+                                            continue
+                                        }
                                     }
-                                    currentPublishTelemetry(
-                                        if (isDragging) tr("arrastando", "dragging") else "dx ${delta.x.roundToInt()}  dy ${delta.y.roundToInt()}",
-                                        55L,
-                                    )
+
+                                    val filtered = noiseFilter.step(delta.x, delta.y, change.uptimeMillis)
+                                    val filteredStep = hypot(filtered.dx, filtered.dy).toFloat()
+                                    totalMove += filteredStep
+                                    if (filtered.dx != 0.0 || filtered.dy != 0.0) {
+                                        val boost = 1.0 + (filtered.speedDpPerSec / 1150.0).coerceIn(0.0, 0.55)
+                                        val sx = filtered.dx * currentPointerSpeed * boost
+                                        val sy = filtered.dy * currentPointerSpeed * boost
+                                        sendOrReport(activeSession) {
+                                            activeSession.movePointer(sx, sy)
+                                        }
+                                        currentPublishTelemetry(
+                                            if (isDragging) tr("arrastando", "dragging") else "dx ${filtered.dx.roundToInt()}  dy ${filtered.dy.roundToInt()}",
+                                            55L,
+                                        )
+                                    }
                                     change.consume()
                                 }
                             } else if (pressed.size >= 2) {
@@ -1123,7 +1827,8 @@ internal fun TouchpadSurface(
                                 val avgDx = sumX / pressed.size
                                 val avgDy = sumY / pressed.size
                                 totalMove += hypot(avgDx, avgDy).toFloat()
-                                if (abs(avgDx) > 0.25 || abs(avgDy) > 0.25) {
+                                val scrollDeadzone = 0.45 * touchDensity
+                                if (abs(avgDx) > scrollDeadzone || abs(avgDy) > scrollDeadzone) {
                                     val scrollSign = if (currentNaturalScroll) 1.0 else -1.0
                                     sendOrReport(activeSession) {
                                         activeSession.scrollPointer(
@@ -1131,7 +1836,7 @@ internal fun TouchpadSurface(
                                             avgDy * 0.42 * scrollSign,
                                         )
                                     }
-                                    currentPublishTelemetry("scroll", 55L)
+                                    currentPublishTelemetry(tr("rolar", "scroll"), 55L)
                                     pressed.forEach { it.consume() }
                                 }
                             }
@@ -1171,14 +1876,14 @@ internal fun TouchpadSurface(
                 )
                 Button(
                     onClick = onRetry,
-                    shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                    shape = RoundedCornerShape(OraculoMetrics.CornerPill),
                     contentPadding = if (compactMode) PaddingValues(horizontal = 12.dp) else ButtonDefaults.ContentPadding,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = OraculoColors.SecondaryContainer,
                         contentColor = OraculoColors.OnSecondaryContainer,
                     ),
-                    modifier = Modifier.height(
-                        if (compactMode) OraculoMetrics.ControlHeightSmall else OraculoMetrics.ControlHeightDialog,
+                    modifier = Modifier.heightIn(
+                        min = if (compactMode) OraculoMetrics.ControlHeightSmall else OraculoMetrics.ControlHeightDialog,
                     ),
                 ) {
                     Text(
@@ -1204,7 +1909,7 @@ internal fun TouchpadSurface(
                         textAlign = TextAlign.Center,
                     )
                     Text(
-                        text = tr("Toque: clicar · 2 dedos: direito/rolar", "Tap: click · 2 fingers: right/scroll"),
+                        text = tr("Toque: clicar · 2× arrastar · 2/3 dedos: dir./meio", "Tap: click · 2× drag · 2/3 fingers: right/middle"),
                         style = MaterialTheme.typography.labelSmall,
                         color = OraculoColors.OnSurfaceMuted,
                         textAlign = TextAlign.Center,
@@ -1223,7 +1928,7 @@ internal fun TouchpadSurface(
                         textAlign = TextAlign.Center,
                     )
                     Text(
-                        text = tr("Dois dedos: clique direito ou rolar", "Two fingers: right-click or scroll"),
+                        text = tr("2 dedos: direito ou rolar · 3 dedos: botão do meio", "2 fingers: right-click or scroll · 3 fingers: middle click"),
                         style = MaterialTheme.typography.bodySmall,
                         color = OraculoColors.OnSurfaceMuted,
                         textAlign = TextAlign.Center,
@@ -1235,11 +1940,11 @@ internal fun TouchpadSurface(
         if (isConnecting) {
             Surface(
                 color = OraculoColors.SurfaceRecessed,
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(overlayPadding)
-                    .border(1.dp, OraculoColors.Outline, RoundedCornerShape(12.dp)),
+                    .border(1.dp, OraculoColors.Outline, RoundedCornerShape(OraculoMetrics.CornerMedium)),
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
@@ -1299,6 +2004,7 @@ private fun TouchpadTelemetryPill(
             )
         }
     }
+
 }
 
 @Composable
@@ -1361,6 +2067,7 @@ private fun MouseKeyButton(
     cornerRadius: Dp = OraculoMetrics.CornerLarge,
 ) {
     var isPressed by remember { mutableStateOf(false) }
+    val currentOnPressChanged by rememberUpdatedState(onPressChanged)
     val shape = RoundedCornerShape(cornerRadius)
     val bg by animateColorAsState(
         targetValue = when {
@@ -1383,7 +2090,7 @@ private fun MouseKeyButton(
     val contentColor by animateColorAsState(
         targetValue = when {
             !enabled -> OraculoColors.OnSurfaceMuted.copy(alpha = 0.6f)
-            isPressed -> OraculoColors.Primary
+            isPressed -> OraculoColors.OnSecondaryContainer
             else -> OraculoColors.OnSurface
         },
         animationSpec = OraculoMotion.microTween(),
@@ -1409,7 +2116,7 @@ private fun MouseKeyButton(
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
                     isPressed = true
-                    onPressChanged(true)
+                    currentOnPressChanged(true)
                     try {
                         while (true) {
                             val event = awaitPointerEvent()
@@ -1419,7 +2126,7 @@ private fun MouseKeyButton(
                         }
                     } finally {
                         isPressed = false
-                        onPressChanged(false)
+                        currentOnPressChanged(false)
                     }
                 }
             },
@@ -1486,29 +2193,49 @@ private data class TerminalQuickKeySpec(
     val clearsDraft: Boolean = true,
 )
 
-private val TERMINAL_QUICK_KEYS = listOf(
+private fun buildTerminalQuickKeys(): List<TerminalQuickKeySpec> = listOf(
+    TerminalQuickKeySpec("Esc", byteArrayOf(27)),
     TerminalQuickKeySpec("Tab", byteArrayOf(9)),
-    TerminalQuickKeySpec("Apagar", byteArrayOf(0x7f), Icons.AutoMirrored.Filled.Backspace),
+    TerminalQuickKeySpec("S-Tab", "\u001b[Z".encodeToByteArray()),
     TerminalQuickKeySpec("Ctrl+C", byteArrayOf(3)),
+    TerminalQuickKeySpec("y", "y\r".encodeToByteArray()),
+    TerminalQuickKeySpec("n", "n\r".encodeToByteArray()),
+    TerminalQuickKeySpec("Enter", byteArrayOf(13)),
+    TerminalQuickKeySpec(tr("Cima", "Up"), "\u001b[A".encodeToByteArray(), Icons.Default.KeyboardArrowUp),
+    TerminalQuickKeySpec(tr("Baixo", "Down"), "\u001b[B".encodeToByteArray(), Icons.Default.KeyboardArrowDown),
+    TerminalQuickKeySpec(tr("Esquerda", "Left"), "\u001b[D".encodeToByteArray(), Icons.AutoMirrored.Filled.KeyboardArrowLeft),
+    TerminalQuickKeySpec(tr("Direita", "Right"), "\u001b[C".encodeToByteArray(), Icons.AutoMirrored.Filled.KeyboardArrowRight),
+    TerminalQuickKeySpec(tr("Apagar", "Backspace"), byteArrayOf(0x7f), Icons.AutoMirrored.Filled.Backspace),
+    TerminalQuickKeySpec("Ctrl+Z", byteArrayOf(26)),
     TerminalQuickKeySpec("Ctrl+D", byteArrayOf(4)),
     TerminalQuickKeySpec("Ctrl+L", byteArrayOf(12), clearsDraft = false),
-    TerminalQuickKeySpec("Esc", byteArrayOf(27)),
-    TerminalQuickKeySpec("Esquerda", "\u001b[D".encodeToByteArray(), Icons.AutoMirrored.Filled.KeyboardArrowLeft),
-    TerminalQuickKeySpec("Cima", "\u001b[A".encodeToByteArray(), Icons.Default.KeyboardArrowUp),
-    TerminalQuickKeySpec("Baixo", "\u001b[B".encodeToByteArray(), Icons.Default.KeyboardArrowDown),
-    TerminalQuickKeySpec("Direita", "\u001b[C".encodeToByteArray(), Icons.AutoMirrored.Filled.KeyboardArrowRight),
-    TerminalQuickKeySpec("Enter", byteArrayOf(13)),
 )
+
+private val DEFAULT_SESSION_LABEL_REGEX = Regex("^Sessão\\s+(\\d+)$")
+
+private fun localizeSessionLabel(raw: String): String {
+    if (!AppI18n.isPt) {
+        val m = DEFAULT_SESSION_LABEL_REGEX.matchEntire(raw.trim())
+        if (m != null) {
+            return "Session ${m.groupValues[1]}"
+        }
+    }
+    return raw
+}
 
 @Composable
 private fun TerminalTab(
     client: OraculoMobileClient,
     host: SavedHostInfo,
     isActive: Boolean,
+    allowTerminal: Boolean? = null,
+    connectionRestoredNonce: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
+    @Suppress("DEPRECATION")
     val clipboard = LocalClipboardManager.current
     val prefs = remember(context) {
         context.getSharedPreferences("oraculo_prefs", Context.MODE_PRIVATE)
@@ -1536,15 +2263,30 @@ private fun TerminalTab(
     val ptyxis = ptyxisPaletteFor(OraculoColors.IsDark)
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val inputFocusRequester = remember { FocusRequester() }
+    val softwareKeyboard = LocalSoftwareKeyboardController.current
     val pendingSnapshot = remember { AtomicReference<TerminalScreenSnapshot?>(null) }
     val renderScheduled = remember { AtomicBoolean(false) }
 
     var reconnectNonce by remember { mutableIntStateOf(0) }
+    var autoRetryAttempts by remember(host.endpointId) { mutableIntStateOf(0) }
+    var pendingRetryDelayMs by remember(host.endpointId) { mutableStateOf(0L) }
+    var lastTerminalError by remember(host.endpointId) { mutableStateOf<String?>(null) }
     var session by remember { mutableStateOf<MobileTerminalSession?>(null) }
+    var sessionsList by remember(host.endpointId) {
+        mutableStateOf<List<MobileTerminalSessionInfo>>(emptyList())
+    }
+    var requestedSessionId by remember(host.endpointId) { mutableStateOf<String?>(null) }
+    var requestedNewLabel by remember(host.endpointId) { mutableStateOf<String?>(null) }
+    var activeSessionId by remember(host.endpointId) { mutableStateOf<String?>(null) }
+    var activeSessionLabel by remember(host.endpointId) { mutableStateOf<String?>(null) }
+    var activeSessionPersistent by remember(host.endpointId) { mutableStateOf(false) }
+    var showKillConfirm by remember { mutableStateOf(false) }
+    var isKillingSession by remember { mutableStateOf(false) }
+
     var screenSnapshot by remember { mutableStateOf<TerminalScreenSnapshot?>(null) }
     var screenRevision by remember { mutableIntStateOf(0) }
     var fallbackMessage by remember {
-        mutableStateOf(tr("Conectando PTY a ${host.hostName}...", "Connecting PTY to ${host.hostName}..."))
+        mutableStateOf(tr("Conectando a ${host.hostName}...", "Connecting to ${host.hostName}..."))
     }
     var terminalStatus by remember { mutableStateOf(tr("Conectando...", "Connecting...")) }
     var remoteField by remember { mutableStateOf(TextFieldValue("")) }
@@ -1555,6 +2297,17 @@ private fun TerminalTab(
     var copiedRecently by remember { mutableStateOf(false) }
     var lastBellCount by remember { mutableStateOf(0UL) }
     var visualBellActive by remember { mutableStateOf(false) }
+
+    fun refreshSessions() {
+        scope.launch {
+            val fetched = withContext(Dispatchers.IO) {
+                runCatching { client.listTerminalSessions(host.endpointId) }.getOrNull()
+            }
+            if (fetched != null) {
+                sessionsList = fetched
+            }
+        }
+    }
 
     val plainCopyText = remember(screenSnapshot, fallbackMessage) {
         (screenSnapshot?.plainText ?: fallbackMessage).trimEnd('\n', '\r', ' ').ifEmpty { " " }
@@ -1580,33 +2333,124 @@ private fun TerminalTab(
         withContext(Dispatchers.IO) {
             runCatching { activeSession.resize(termCols.toUShort(), termRows.toUShort()) }
         }
-        if (terminalStatus.startsWith("Shell ativo") || terminalStatus.startsWith("Active shell")) {
-            terminalStatus = tr("Shell ativo (${termCols}x${termRows})", "Active shell (${termCols}x${termRows})")
+        if (terminalStatus.startsWith("Terminal (")) {
+            terminalStatus = "Terminal (${termCols}×${termRows})"
+        }
+    }
+
+    val currentAllowTerminal by rememberUpdatedState(allowTerminal)
+
+    LaunchedEffect(allowTerminal) {
+        if (allowTerminal == false) {
+            val prev = session
+            session = null
+            sessionsList = emptyList()
+            requestedSessionId = null
+            activeSessionId = null
+            activeSessionLabel = null
+            isConnecting = false
+            terminalStatus = tr("Desativado no computador", "Disabled on computer")
+            fallbackMessage = tr(
+                "Terminal desativado em Acesso no computador.",
+                "Terminal disabled in Access on computer.",
+            )
+            if (prev != null) {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        prev.closeSession()
+                        prev.close()
+                    }
+                }
+            }
+        } else if (allowTerminal == true && session == null && !isConnecting) {
+            autoRetryAttempts = 0
+            pendingRetryDelayMs = 0L
+            lastTerminalError = null
+            reconnectNonce += 1
+        }
+    }
+
+    LaunchedEffect(connectionRestoredNonce) {
+        if (connectionRestoredNonce == 0 || allowTerminal == false || isKillingSession) return@LaunchedEffect
+        val blockedByPolicy = lastTerminalError != null && isPermanentRemoteError(lastTerminalError!!)
+        if (!blockedByPolicy && session == null && !isConnecting) {
+            autoRetryAttempts = 0
+            pendingRetryDelayMs = 0L
+            lastTerminalError = null
+            reconnectNonce += 1
         }
     }
 
     DisposableEffect(host.endpointId, reconnectNonce) {
-        var active = true
-        var openedSession: MobileTerminalSession? = null
+        if (currentAllowTerminal == false) {
+            isConnecting = false
+            terminalStatus = tr("Desativado no computador", "Disabled on computer")
+            fallbackMessage = tr(
+                "Terminal desativado em Acesso no computador.",
+                "Terminal disabled in Access on computer.",
+            )
+            return@DisposableEffect onDispose {}
+        }
+        val active = AtomicBoolean(true)
+        val sessionRef = AtomicReference<MobileTerminalSession?>(null)
+        val streamEndedOrErrored = AtomicBoolean(false)
+        val launchSessionId = requestedSessionId
+        val launchNewLabel = requestedNewLabel
+        val retryDelayMs = pendingRetryDelayMs
+        pendingRetryDelayMs = 0L
+        requestedNewLabel = null
         pendingSnapshot.set(null)
         renderScheduled.set(false)
         isConnecting = true
-        screenSnapshot = null
-        screenRevision = 0
-        fallbackMessage = tr("Conectando PTY a ${host.hostName}...", "Connecting PTY to ${host.hostName}...")
-        terminalStatus = tr("Abrindo shell...", "Opening shell...")
+        val keepingSnapshotOnReattach =
+            screenSnapshot != null && launchSessionId != null && launchSessionId == activeSessionId
+        if (!keepingSnapshotOnReattach) {
+            screenSnapshot = null
+            screenRevision = 0
+        }
+        fallbackMessage = tr("Conectando a ${host.hostName}...", "Connecting to ${host.hostName}...")
+        terminalStatus = if (keepingSnapshotOnReattach) {
+            tr("Reconectando terminal...", "Reconnecting terminal...")
+        } else {
+            tr("Abrindo terminal...", "Opening terminal...")
+        }
         remoteField = TextFieldValue("")
         syncedText = ""
 
         val job = CoroutineScope(Dispatchers.IO).launch {
+            if (retryDelayMs > 0L) {
+                delay(retryDelayMs)
+                if (!active.get()) return@launch
+            }
             val observer = object : TerminalObserver {
+                override fun onSessionReady(
+                    sessionId: String,
+                    label: String,
+                    persistent: Boolean,
+                    reconnected: Boolean,
+                ) {
+                    mainHandler.post {
+                        if (!active.get()) return@post
+                        autoRetryAttempts = 0
+                        pendingRetryDelayMs = 0L
+                        lastTerminalError = null
+                        activeSessionId = sessionId
+                        if (persistent) {
+                            requestedSessionId = sessionId
+                        }
+                        activeSessionLabel = label
+                        activeSessionPersistent = persistent
+                        refreshSessions()
+                    }
+                }
+
                 override fun onScreenUpdated(snapshot: TerminalScreenSnapshot) {
-                    if (!active) return
+                    if (!active.get()) return
                     pendingSnapshot.set(snapshot)
                     if (renderScheduled.compareAndSet(false, true)) {
                         mainHandler.post {
                             renderScheduled.set(false)
-                            if (!active) return@post
+                            if (!active.get()) return@post
                             val latest = pendingSnapshot.getAndSet(null) ?: return@post
                             screenSnapshot = latest
                             screenRevision += 1
@@ -1614,84 +2458,150 @@ private fun TerminalTab(
                                 lastBellCount = latest.bellCount
                                 visualBellActive = true
                             }
-                            terminalStatus = tr(
-                                "Shell ativo (${latest.cols}x${latest.rows})",
-                                "Active shell (${latest.cols}x${latest.rows})",
-                            )
+                            terminalStatus = "Terminal (${latest.cols}×${latest.rows})"
                             isConnecting = false
                         }
                     }
                 }
 
                 override fun onSessionEnded(exitCode: Int) {
+                    streamEndedOrErrored.set(true)
                     mainHandler.post {
-                        if (active) {
+                        if (active.get()) {
+                            session = null
+                            if (requestedSessionId == activeSessionId) {
+                                requestedSessionId = null
+                            }
                             terminalStatus = tr("Encerrado (exit $exitCode)", "Ended (exit $exitCode)")
+                            if (screenSnapshot == null) {
+                                fallbackMessage = tr(
+                                    "Sessão de terminal encerrada (código $exitCode).",
+                                    "Terminal session ended (exit code $exitCode).",
+                                )
+                            }
                             isConnecting = false
+                            refreshSessions()
                         }
                     }
                 }
 
                 override fun onError(message: String) {
+                    streamEndedOrErrored.set(true)
                     mainHandler.post {
-                        if (active) {
-                            terminalStatus = tr("Erro: $message", "Error: $message")
-                            isConnecting = false
+                        if (active.get() && !isKillingSession) {
+                            session = null
+                            lastTerminalError = message
+                            val permanent = isPermanentRemoteError(message)
+                            if (permanent && requestedSessionId != null) {
+                                requestedSessionId = null
+                            }
+                            if (!permanent && currentAllowTerminal != false && autoRetryAttempts < 5) {
+                                val backoffSchedule = listOf(700L, 1500L, 2500L, 4000L, 5000L)
+                                pendingRetryDelayMs = backoffSchedule[autoRetryAttempts.coerceAtMost(backoffSchedule.lastIndex)]
+                                autoRetryAttempts += 1
+                                terminalStatus = tr("Reconectando terminal...", "Reconnecting terminal...")
+                                isConnecting = true
+                                reconnectNonce += 1
+                            } else {
+                                terminalStatus = tr("Erro: $message", "Error: $message")
+                                if (screenSnapshot == null) {
+                                    fallbackMessage = tr(
+                                        "Não foi possível conectar ao terminal:\n$message",
+                                        "Could not connect to terminal:\n$message",
+                                    )
+                                }
+                                isConnecting = false
+                                refreshSessions()
+                            }
                         }
                     }
                 }
             }
 
             val result = runCatching {
-                client.openTerminal(
+                client.openTerminalSession(
                     endpointId = host.endpointId,
                     cols = termCols.toUShort(),
                     rows = termRows.toUShort(),
+                    persistent = true,
+                    sessionId = launchSessionId,
+                    label = launchNewLabel,
                     observer = observer,
                 )
             }
 
-            result.onSuccess { created ->
-                if (active) {
-                    openedSession = created
-                    withContext(Dispatchers.Main) {
-                        session = created
-                        terminalStatus = tr(
-                            "Shell ativo (${termCols}x${termRows})",
-                            "Active shell (${termCols}x${termRows})",
-                        )
-                        isConnecting = false
-                    }
-                } else {
+            if (!active.get() || streamEndedOrErrored.get()) {
+                result.onSuccess { created ->
                     runCatching {
                         created.closeSession()
                         created.close()
                     }
                 }
-            }.onFailure { err ->
-                withContext(Dispatchers.Main) {
-                    if (active) {
+                if (!active.get() || result.isSuccess) return@launch
+            }
+
+            result.onSuccess { created ->
+                sessionRef.set(created)
+                withContext(Dispatchers.Main + NonCancellable) {
+                    if (active.get() && !streamEndedOrErrored.get()) {
+                        session = created
+                        if (screenSnapshot == null) {
+                            terminalStatus = "Terminal (${termCols}×${termRows})"
+                        }
                         isConnecting = false
-                        screenSnapshot = null
-                        screenRevision = 0
-                        terminalStatus = tr("Falha na conexão", "Connection failed")
-                        fallbackMessage = tr(
-                            "Não foi possível abrir o terminal:\n${formatOraculoError(err)}",
-                            "Could not open terminal:\n${formatOraculoError(err)}",
-                        )
+                    } else {
+                        val toClose = sessionRef.getAndSet(null)
+                        if (toClose != null) {
+                            CoroutineScope(Dispatchers.IO).launch {
+                                runCatching {
+                                    toClose.closeSession()
+                                    toClose.close()
+                                }
+                            }
+                        }
+                    }
+                }
+            }.onFailure { err ->
+                val msg = formatOraculoError(err)
+                withContext(Dispatchers.Main + NonCancellable) {
+                    if (active.get()) {
+                        lastTerminalError = msg
+                        val permanent = isPermanentRemoteError(msg)
+                        if (permanent && requestedSessionId != null) {
+                            requestedSessionId = null
+                        }
+                        if (!permanent && currentAllowTerminal != false && autoRetryAttempts < 5) {
+                            val backoffSchedule = listOf(700L, 1500L, 2500L, 4000L, 5000L)
+                            pendingRetryDelayMs = backoffSchedule[autoRetryAttempts.coerceAtMost(backoffSchedule.lastIndex)]
+                            autoRetryAttempts += 1
+                            terminalStatus = tr("Reconectando terminal...", "Reconnecting terminal...")
+                            isConnecting = true
+                            reconnectNonce += 1
+                        } else {
+                            isConnecting = false
+                            if (!keepingSnapshotOnReattach) {
+                                screenSnapshot = null
+                                screenRevision = 0
+                            }
+                            terminalStatus = tr("Falha na conexão", "Connection failed")
+                            fallbackMessage = tr(
+                                "Não foi possível abrir o terminal:\n$msg",
+                                "Could not open terminal:\n$msg",
+                            )
+                        }
                     }
                 }
             }
         }
 
         onDispose {
-            active = false
+            active.set(false)
             pendingSnapshot.set(null)
             renderScheduled.set(false)
             job.cancel()
             remoteField = TextFieldValue("")
             syncedText = ""
-            val toClose = openedSession ?: session
+            val toClose = sessionRef.getAndSet(null) ?: session
             session = null
             if (toClose != null) {
                 CoroutineScope(Dispatchers.IO).launch {
@@ -1717,7 +2627,10 @@ private fun TerminalTab(
         }
         runCatching { current.sendInput(bytes) }
             .onFailure { err ->
-                terminalStatus = "Erro ao enviar: ${formatOraculoError(err)}"
+                terminalStatus = tr(
+                    "Erro ao enviar: ${formatOraculoError(err)}",
+                    "Send failed: ${formatOraculoError(err)}",
+                )
             }
     }
 
@@ -1748,9 +2661,20 @@ private fun TerminalTab(
         animationSpec = OraculoMotion.stateTween(),
         label = "ptyxisBellBorder",
     )
-    val windowTitle = screenSnapshot?.title?.takeIf { it.isNotBlank() } ?: terminalStatus
+    val windowTitle = remember(activeSessionLabel, screenSnapshot?.title, terminalStatus, session, AppI18n.lang) {
+        val snapTitle = screenSnapshot?.title?.takeIf { it.isNotBlank() }
+        val base = activeSessionLabel?.takeIf { it.isNotBlank() }?.let(::localizeSessionLabel)
+        when {
+            base != null && snapTitle != null && snapTitle != base -> "$base · $snapTitle"
+            base != null && session == null -> "$base · $terminalStatus"
+            base != null -> base
+            snapTitle != null -> snapTitle
+            else -> terminalStatus
+        }
+    }
     val displayCols = screenSnapshot?.cols?.toInt() ?: termCols
     val displayRows = screenSnapshot?.rows?.toInt() ?: termRows
+    val runningCount = remember(sessionsList) { sessionsList.count { it.running } }
 
     Column(
         modifier = modifier
@@ -1759,13 +2683,132 @@ private fun TerminalTab(
             .padding(bottom = 10.dp, top = 2.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        if (allowTerminal != false && (sessionsList.isNotEmpty() || (!isConnecting && session == null))) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                sessionsList.forEach { item ->
+                    val isSelected = item.id == activeSessionId
+                    val displayLabel = localizeSessionLabel(item.label)
+                    FilterChip(
+                        selected = isSelected,
+                        enabled = !isKillingSession,
+                        onClick = {
+                            if (isKillingSession) return@FilterChip
+                            if (item.id != activeSessionId || session == null) {
+                                requestedSessionId = item.id
+                                requestedNewLabel = null
+                                reconnectNonce += 1
+                            }
+                        },
+                        leadingIcon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(RoundedCornerShape(OraculoMetrics.CornerPill))
+                                    .background(
+                                        if (item.running) OraculoColors.Success else OraculoColors.OnSurfaceMuted,
+                                    ),
+                            )
+                        },
+                        trailingIcon = if (isSelected && activeSessionPersistent) {
+                            {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(OraculoMetrics.CornerPill))
+                                        .clickable(enabled = !isKillingSession) {
+                                            showKillConfirm = true
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = tr("Encerrar $displayLabel", "End $displayLabel"),
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
+                        } else {
+                            null
+                        },
+                        label = {
+                            Text(
+                                text = if (item.running) {
+                                    displayLabel
+                                } else {
+                                    "$displayLabel (${tr("fim", "done")})"
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = OraculoColors.Surface,
+                            labelColor = OraculoColors.OnSurfaceMuted,
+                            selectedContainerColor = OraculoColors.SecondaryContainer,
+                            selectedLabelColor = OraculoColors.OnSecondaryContainer,
+                            selectedTrailingIconColor = OraculoColors.OnSecondaryContainer,
+                        ),
+                        border = if (OraculoColors.IsDark && isSelected) {
+                            null
+                        } else {
+                            FilterChipDefaults.filterChipBorder(
+                                enabled = !isKillingSession,
+                                selected = isSelected,
+                                borderColor = OraculoColors.Outline,
+                                selectedBorderColor = OraculoColors.Primary,
+                            )
+                        },
+                        modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightSmall),
+                    )
+                }
+
+                FilterChip(
+                    selected = false,
+                    enabled = runningCount < 4 && !isKillingSession,
+                    onClick = {
+                        val nextIdx = sessionsList.size + 1
+                        requestedSessionId = null
+                        requestedNewLabel = tr("Sessão $nextIdx", "Session $nextIdx")
+                        reconnectNonce += 1
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    },
+                    label = { Text(tr("Nova", "New")) },
+                    shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                    colors = FilterChipDefaults.filterChipColors(
+                        containerColor = OraculoColors.Surface,
+                        labelColor = OraculoColors.Primary,
+                        iconColor = OraculoColors.Primary,
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = runningCount < 4 && !isKillingSession,
+                        selected = false,
+                        borderColor = OraculoColors.Outline,
+                    ),
+                    modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightSmall),
+                )
+            }
+        }
+
         Column(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
+                .clip(RoundedCornerShape(OraculoMetrics.CornerLarge))
                 .background(ptyxis.Background)
-                .border(1.dp, terminalBorderColor, RoundedCornerShape(16.dp)),
+                .border(1.dp, terminalBorderColor, RoundedCornerShape(OraculoMetrics.CornerLarge)),
         ) {
             PtyxisTerminalHeader(
                 title = windowTitle,
@@ -1778,8 +2821,9 @@ private fun TerminalTab(
                 onDecreaseFont = { updateFontSize(-1f) },
                 onIncreaseFont = { updateFontSize(1f) },
                 onCopy = {
-                    clipboard.setText(AnnotatedString(plainCopyText))
-                    copiedRecently = true
+                    if (runCatching { clipboard.setText(AnnotatedString(plainCopyText)) }.isSuccess) {
+                        copiedRecently = true
+                    }
                 },
                 onClearTerminal = { sendBytes(byteArrayOf(12)) },
                 onReconnect = { reconnectNonce += 1 },
@@ -1805,7 +2849,10 @@ private fun TerminalTab(
                     termRows = rows
                 },
                 onTapViewport = {
-                    runCatching { inputFocusRequester.requestFocus() }
+                    runCatching {
+                        inputFocusRequester.requestFocus()
+                        softwareKeyboard?.show()
+                    }
                 },
                 modifier = Modifier
                     .weight(1f)
@@ -1838,8 +2885,8 @@ private fun TerminalTab(
                     if (newText != syncedText) {
                         val (deletes, inserted) = computeLiveTextDelta(syncedText, newText)
                         sendLiveDelta(deletes, inserted)
-                        if (newText.contains('\n')) {
-                            val tail = newText.substringAfterLast('\n')
+                        if (newText.contains('\n') || newText.contains('\r')) {
+                            val tail = newText.replace("\r\n", "\n").replace('\r', '\n').substringAfterLast('\n')
                             val (nextSynced, nextField) = applyLiveDraftWindow(
                                 TextFieldValue(
                                     text = tail,
@@ -1860,20 +2907,20 @@ private fun TerminalTab(
                 placeholder = {
                     Text(
                         if (session != null) {
-                            tr("Digite em tempo real no shell...", "Type live into the shell...")
+                            tr("Digite para enviar ao terminal...", "Type to send to terminal...")
                         } else {
-                            tr("Aguardando shell...", "Waiting for shell...")
+                            tr("Aguardando terminal...", "Waiting for terminal...")
                         },
                     )
                 },
                 singleLine = true,
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                 trailingIcon = if (remoteField.text.isNotEmpty()) {
                     {
                         IconButton(onClick = { clearDraft() }) {
                             Icon(
                                 imageVector = Icons.Default.Close,
-                                contentDescription = "Limpar campo local",
+                                contentDescription = tr("Limpar texto", "Clear text"),
                                 tint = OraculoColors.OnSurfaceMuted,
                                 modifier = Modifier.size(18.dp),
                             )
@@ -1923,11 +2970,98 @@ private fun TerminalTab(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardReturn,
-                    contentDescription = "Enviar Enter",
+                    contentDescription = tr("Enviar Enter", "Send Enter"),
                     modifier = Modifier.size(20.dp),
                 )
             }
         }
+    }
+
+    if (showKillConfirm) {
+        val killId = activeSessionId
+        val killLabel = activeSessionLabel?.let(::localizeSessionLabel) ?: killId.orEmpty()
+        AlertDialog(
+            onDismissRequest = { if (!isKillingSession) showKillConfirm = false },
+            containerColor = OraculoColors.Surface,
+            titleContentColor = OraculoColors.OnSurface,
+            textContentColor = OraculoColors.OnSurface,
+            title = {
+                Text(
+                    tr("Encerrar '$killLabel'?", "End '$killLabel'?"),
+                )
+            },
+            text = {
+                Text(
+                    tr(
+                        "Isso finaliza o shell e qualquer processo ou agente em execução nessa sessão no computador.",
+                        "This terminates the shell and any running process or agent in this session on your computer.",
+                    ),
+                    color = OraculoColors.OnSurfaceMuted,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (killId == null || isKillingSession) return@Button
+                        isKillingSession = true
+                        val prevSession = session
+                        session = null
+                        activeSessionId = null
+                        activeSessionLabel = null
+                        requestedSessionId = null
+                        scope.launch {
+                            val res = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    prevSession?.closeSession()
+                                    prevSession?.close()
+                                    client.killTerminalSession(host.endpointId, killId)
+                                    client.listTerminalSessions(host.endpointId)
+                                }
+                            }
+                            isKillingSession = false
+                            showKillConfirm = false
+                            res.onSuccess { remaining ->
+                                sessionsList = remaining
+                                val nextRunning = remaining.firstOrNull { it.running }
+                                if (nextRunning != null) {
+                                    requestedSessionId = nextRunning.id
+                                    reconnectNonce += 1
+                                } else {
+                                    screenSnapshot = null
+                                    screenRevision = 0
+                                    terminalStatus = tr("Sessão encerrada", "Session ended")
+                                    fallbackMessage = tr(
+                                        "Sessão encerrada no computador. Toque em '+ Nova' para abrir outro shell.",
+                                        "Session closed on computer. Tap '+ New' to open another shell.",
+                                    )
+                                }
+                            }.onFailure { err ->
+                                terminalStatus = formatOraculoError(err)
+                            }
+                        }
+                    },
+                    enabled = !isKillingSession,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = OraculoColors.Error,
+                        contentColor = OraculoColors.OnError,
+                    ),
+                    shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                    modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightDialog),
+                ) {
+                    Text(if (isKillingSession) tr("Encerrando...", "Ending...") else tr("Encerrar", "End"))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showKillConfirm = false },
+                    enabled = !isKillingSession,
+                    shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                    modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightDialog),
+                ) {
+                    Text(tr("Cancelar", "Cancel"), color = OraculoColors.OnSurfaceMuted)
+                }
+            },
+        )
     }
 }
 
@@ -1946,13 +3080,16 @@ private fun PtyxisTerminalHeader(
     onClearTerminal: () -> Unit,
     onReconnect: () -> Unit,
 ) {
+    val canDecreaseFont = fontSizeSp > 10f
+    val canIncreaseFont = fontSizeSp < 18f
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(ptyxis.HeaderBackground)
             .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
             text = title,
@@ -1972,35 +3109,35 @@ private fun PtyxisTerminalHeader(
         )
         IconButton(
             onClick = onDecreaseFont,
-            enabled = fontSizeSp > 10f,
-            modifier = Modifier.size(28.dp),
+            enabled = canDecreaseFont,
+            modifier = Modifier.size(36.dp),
         ) {
             Icon(
                 imageVector = Icons.Default.ZoomOut,
-                contentDescription = "Diminuir fonte",
-                tint = ptyxis.ForegroundMuted,
+                contentDescription = tr("Diminuir fonte", "Decrease font size"),
+                tint = if (canDecreaseFont) ptyxis.ForegroundMuted else ptyxis.ForegroundMuted.copy(alpha = 0.35f),
                 modifier = Modifier.size(16.dp),
             )
         }
         IconButton(
             onClick = onIncreaseFont,
-            enabled = fontSizeSp < 18f,
-            modifier = Modifier.size(28.dp),
+            enabled = canIncreaseFont,
+            modifier = Modifier.size(36.dp),
         ) {
             Icon(
                 imageVector = Icons.Default.ZoomIn,
-                contentDescription = "Aumentar fonte",
-                tint = ptyxis.ForegroundMuted,
+                contentDescription = tr("Aumentar fonte", "Increase font size"),
+                tint = if (canIncreaseFont) ptyxis.ForegroundMuted else ptyxis.ForegroundMuted.copy(alpha = 0.35f),
                 modifier = Modifier.size(16.dp),
             )
         }
         IconButton(
             onClick = onCopy,
-            modifier = Modifier.size(28.dp),
+            modifier = Modifier.size(36.dp),
         ) {
             Icon(
                 imageVector = if (copiedRecently) Icons.Default.Check else Icons.Default.ContentCopy,
-                contentDescription = "Copiar terminal",
+                contentDescription = tr("Copiar terminal", "Copy terminal"),
                 tint = if (copiedRecently) OraculoColors.Primary else ptyxis.ForegroundMuted,
                 modifier = Modifier.size(15.dp),
             )
@@ -2008,27 +3145,28 @@ private fun PtyxisTerminalHeader(
         IconButton(
             onClick = onClearTerminal,
             enabled = canSendClear,
-            modifier = Modifier.size(28.dp),
+            modifier = Modifier.size(36.dp),
         ) {
             Icon(
                 imageVector = Icons.Default.ClearAll,
-                contentDescription = "Limpar terminal",
-                tint = ptyxis.ForegroundMuted,
+                contentDescription = tr("Limpar terminal", "Clear terminal"),
+                tint = if (canSendClear) ptyxis.ForegroundMuted else ptyxis.ForegroundMuted.copy(alpha = 0.35f),
                 modifier = Modifier.size(16.dp),
             )
         }
         IconButton(
             onClick = onReconnect,
-            modifier = Modifier.size(28.dp),
+            modifier = Modifier.size(36.dp),
         ) {
             Icon(
                 imageVector = Icons.Default.Refresh,
-                contentDescription = "Reconectar terminal",
+                contentDescription = tr("Reconectar terminal", "Reconnect terminal"),
                 tint = ptyxis.ForegroundMuted,
                 modifier = Modifier.size(16.dp),
             )
         }
     }
+
 }
 
 @Composable
@@ -2046,11 +3184,23 @@ private fun PtyxisViewport(
 ) {
     val density = LocalDensity.current
     val textMeasurer = rememberTextMeasurer()
+    val currentOnGridMeasured by rememberUpdatedState(onGridMeasured)
+    var lastViewportSizePx by remember { mutableStateOf(IntSize.Zero) }
     val cellMetrics = remember(textMeasurer, terminalStyle) {
         val measured = textMeasurer.measure("MMMMMMMMMM", style = terminalStyle)
         val charWidth = (measured.size.width / 10f).coerceAtLeast(1f)
         val lineHeight = measured.size.height.toFloat().coerceAtLeast(1f)
         charWidth to lineHeight
+    }
+    val padPx = with(density) { 20.dp.toPx() }
+    LaunchedEffect(lastViewportSizePx, cellMetrics, padPx) {
+        if (lastViewportSizePx.width > 0 && lastViewportSizePx.height > 0) {
+            val innerW = (lastViewportSizePx.width - padPx).coerceAtLeast(cellMetrics.first * 36)
+            val innerH = (lastViewportSizePx.height - padPx).coerceAtLeast(cellMetrics.second * 10)
+            val cols = (innerW / cellMetrics.first).toInt().coerceIn(36, 180)
+            val rows = (innerH / cellMetrics.second).toInt().coerceIn(10, 72)
+            currentOnGridMeasured(cols, rows)
+        }
     }
 
     val cursorEnabled = (screenSnapshot?.cursorVisible == true) && !isConnecting
@@ -2065,7 +3215,7 @@ private fun PtyxisViewport(
         }
     }
 
-    val renderedBase = remember(screenSnapshot, fallbackMessage, ptyxis, cursorEnabled) {
+    val renderedBase = remember(screenSnapshot, fallbackMessage, ptyxis) {
         val snap = screenSnapshot
         if (snap != null) {
             buildPtyxisAnnotatedScreen(snap, ptyxis, showCursor = false)
@@ -2073,35 +3223,25 @@ private fun PtyxisViewport(
             AnnotatedString(fallbackMessage.trimEnd('\n', '\r', ' ').ifEmpty { " " })
         }
     }
-    val renderedWithCursor = remember(screenSnapshot, ptyxis, cursorEnabled) {
-        val snap = screenSnapshot
-        if (snap != null && cursorEnabled) {
-            buildPtyxisAnnotatedScreen(snap, ptyxis, showCursor = true)
-        } else {
-            null
-        }
-    }
-    val renderedScreen = if (cursorEnabled && cursorBlinkOn && renderedWithCursor != null) {
-        renderedWithCursor
-    } else {
-        renderedBase
-    }
+    var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
 
     val verticalScroll = rememberScrollState()
     val horizontalScroll = rememberScrollState()
+    val autoScrollSlackPx = with(density) { 48.dp.toPx() }
     LaunchedEffect(screenRevision, screenSnapshot?.cursorRow) {
-        verticalScroll.scrollTo(verticalScroll.maxValue)
+        val wasNearBottom =
+            verticalScroll.maxValue == 0 ||
+                (verticalScroll.maxValue - verticalScroll.value) <= autoScrollSlackPx
+        if (wasNearBottom) {
+            withFrameNanos { }
+            verticalScroll.scrollTo(verticalScroll.maxValue)
+        }
     }
 
     Box(
         modifier = modifier
             .onSizeChanged { size ->
-                val padPx = with(density) { 20.dp.toPx() }
-                val innerW = (size.width - padPx).coerceAtLeast(cellMetrics.first * 36)
-                val innerH = (size.height - padPx).coerceAtLeast(cellMetrics.second * 10)
-                val cols = (innerW / cellMetrics.first).toInt().coerceIn(36, 180)
-                val rows = (innerH / cellMetrics.second).toInt().coerceIn(10, 72)
-                onGridMeasured(cols, rows)
+                lastViewportSizePx = size
             }
             .pointerInput(Unit) {
                 detectTapGestures(
@@ -2116,14 +3256,51 @@ private fun PtyxisViewport(
                 .verticalScroll(verticalScroll)
                 .horizontalScroll(horizontalScroll),
         ) {
-            SelectionContainer {
-                Text(
-                    text = renderedScreen,
-                    style = terminalStyle,
-                    color = ptyxis.Foreground,
-                    softWrap = false,
-                )
-            }
+            Text(
+                text = renderedBase,
+                style = terminalStyle,
+                color = ptyxis.Foreground,
+                softWrap = false,
+                onTextLayout = { textLayout = it },
+                modifier = Modifier.drawWithContent {
+                    drawContent()
+                    val snap = screenSnapshot
+                    val layout = textLayout
+                    if (snap != null && layout != null && cursorEnabled && cursorBlinkOn && layout.lineCount > 0) {
+                        val row = snap.cursorRow.toInt().coerceIn(0, layout.lineCount - 1)
+                        val col = snap.cursorCol.toInt().coerceAtLeast(0)
+                        val lineStart = layout.getLineStart(row)
+                        val lineEnd = layout.getLineEnd(row, visibleEnd = false)
+                        val lineChars = (lineEnd - lineStart).let { raw ->
+                            if (raw > 0 && layout.layoutInput.text.text.getOrNull(lineEnd - 1) == '\n') {
+                                raw - 1
+                            } else {
+                                raw
+                            }
+                        }.coerceAtLeast(0)
+                        val top = layout.getLineTop(row)
+                        val bottom = layout.getLineBottom(row)
+                        val cellW = cellMetrics.first
+                        val cellH = (bottom - top).coerceAtLeast(cellMetrics.second)
+                        if (col < lineChars) {
+                            val box = layout.getBoundingBox(lineStart + col)
+                            drawRect(
+                                color = ptyxis.Cursor.copy(alpha = 0.45f),
+                                topLeft = Offset(box.left, top),
+                                size = Size(box.width.coerceAtLeast(cellW), cellH),
+                            )
+                        } else {
+                            val baseLeft = if (lineChars > 0) layout.getLineRight(row) else layout.getLineLeft(row)
+                            val extraCols = col - lineChars
+                            drawRect(
+                                color = ptyxis.Cursor.copy(alpha = 0.85f),
+                                topLeft = Offset(baseLeft + extraCols * cellW, top),
+                                size = Size(cellW, cellH),
+                            )
+                        }
+                    }
+                },
+            )
         }
         if (isConnecting) {
             CircularProgressIndicator(
@@ -2135,12 +3312,14 @@ private fun PtyxisViewport(
             )
         }
     }
+
 }
 
 @Composable
 private fun TerminalQuickKeysBar(
     onKey: (TerminalQuickKeySpec) -> Unit,
 ) {
+    val quickKeys = remember(AppI18n.lang) { buildTerminalQuickKeys() }
     val shape = RoundedCornerShape(OraculoMetrics.CornerSmall)
     Row(
         modifier = Modifier
@@ -2148,7 +3327,7 @@ private fun TerminalQuickKeysBar(
             .horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        TERMINAL_QUICK_KEYS.forEach { keySpec ->
+        quickKeys.forEach { keySpec ->
             Surface(
                 onClick = { onKey(keySpec) },
                 color = OraculoColors.Surface,
@@ -2184,6 +3363,7 @@ private fun TerminalQuickKeysBar(
             }
         }
     }
+
 }
 
 private fun resolvePtyxisColor(
@@ -2311,16 +3491,22 @@ private fun buildPtyxisAnnotatedScreen(
             pop()
         }
     }
+
 }
 
 @Composable
 private fun CommandsTab(
     client: OraculoMobileClient,
     host: SavedHostInfo,
+    allowCommandsRun: Boolean? = null,
+    allowCommandsEdit: Boolean? = null,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
+    val canEditCommands = allowCommandsEdit != false
+    val canRunCommands = allowCommandsRun != false
+    val loadGen = remember { AtomicLong(0L) }
     var commands by remember { mutableStateOf<List<QuickCommandItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var runningCommandId by remember { mutableStateOf<String?>(null) }
@@ -2339,12 +3525,14 @@ private fun CommandsTab(
     var deletingCommandId by remember { mutableStateOf<String?>(null) }
 
     fun loadCommands() {
+        val gen = loadGen.incrementAndGet()
         scope.launch {
             isLoading = true
             errorMessage = null
             val res = withContext(Dispatchers.IO) {
                 runCatching { client.listCommands(host.endpointId) }
             }
+            if (gen != loadGen.get()) return@launch
             res.onSuccess { list ->
                 commands = list
             }.onFailure { err ->
@@ -2355,6 +3543,7 @@ private fun CommandsTab(
     }
 
     fun openCreateEditor() {
+        if (!canEditCommands) return
         editCommandId = null
         editLabel = ""
         editDescription = ""
@@ -2363,7 +3552,20 @@ private fun CommandsTab(
         isEditorOpen = true
     }
 
+    LaunchedEffect(allowCommandsRun, allowCommandsEdit) {
+        if (allowCommandsRun == true) {
+            errorMessage = null
+            if (commands.isEmpty() && !isLoading) {
+                loadCommands()
+            }
+        }
+        if (allowCommandsEdit == true) {
+            editorError = null
+        }
+    }
+
     fun openEditEditor(item: QuickCommandItem) {
+        if (!canEditCommands) return
         editCommandId = item.id
         editLabel = item.label
         editDescription = item.description
@@ -2394,65 +3596,79 @@ private fun CommandsTab(
         scope.launch {
             isSavingCommand = true
             editorError = null
-            val res = withContext(Dispatchers.IO) {
-                runCatching {
-                    client.saveCommand(
-                        endpointId = host.endpointId,
-                        id = editCommandId,
-                        label = label,
-                        description = description,
-                        commandLine = commandLine,
-                    )
+            try {
+                val res = withContext(Dispatchers.IO) {
+                    runCatching {
+                        client.saveCommand(
+                            endpointId = host.endpointId,
+                            id = editCommandId,
+                            label = label,
+                            description = description,
+                            commandLine = commandLine,
+                        )
+                    }
                 }
+                res.onSuccess { updated ->
+                    loadGen.incrementAndGet()
+                    commands = updated
+                    isLoading = false
+                    isEditorOpen = false
+                    errorMessage = null
+                }.onFailure { err ->
+                    editorError = formatOraculoError(err)
+                }
+            } finally {
+                isSavingCommand = false
             }
-            res.onSuccess { updated ->
-                commands = updated
-                isEditorOpen = false
-                errorMessage = null
-            }.onFailure { err ->
-                editorError = formatOraculoError(err)
-            }
-            isSavingCommand = false
         }
     }
 
     fun confirmDelete(item: QuickCommandItem) {
+        if (deletingCommandId != null) return
         pendingDeleteCommand = null
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         scope.launch {
             deletingCommandId = item.id
             errorMessage = null
-            val res = withContext(Dispatchers.IO) {
-                runCatching { client.deleteCommand(host.endpointId, item.id) }
-            }
-            res.onSuccess { updated ->
-                commands = updated
-                if (editCommandId == item.id) {
-                    isEditorOpen = false
+            try {
+                val res = withContext(Dispatchers.IO) {
+                    runCatching { client.deleteCommand(host.endpointId, item.id) }
                 }
-            }.onFailure { err ->
-                errorMessage = formatOraculoError(err)
+                res.onSuccess { updated ->
+                    loadGen.incrementAndGet()
+                    commands = updated
+                    isLoading = false
+                    if (editCommandId == item.id) {
+                        isEditorOpen = false
+                    }
+                }.onFailure { err ->
+                    errorMessage = formatOraculoError(err)
+                }
+            } finally {
+                deletingCommandId = null
             }
-            deletingCommandId = null
         }
     }
 
     fun executeCommand(item: QuickCommandItem) {
-        if (runningCommandId != null) return
+        if (!canRunCommands || runningCommandId != null) return
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         scope.launch {
             runningCommandId = item.id
             errorMessage = null
-            val res = withContext(Dispatchers.IO) {
-                runCatching { client.runCommand(host.endpointId, item.id) }
+            try {
+                val res = withContext(Dispatchers.IO) {
+                    runCatching { client.runCommand(host.endpointId, item.id) }
+                }
+                res.onSuccess { output ->
+                    lastCommandLabel = item.label
+                    lastResult = output
+                }.onFailure { err ->
+                    errorMessage = formatOraculoError(err)
+                }
+            } finally {
+                runningCommandId = null
             }
-            res.onSuccess { output ->
-                lastCommandLabel = item.label
-                lastResult = output
-            }.onFailure { err ->
-                errorMessage = formatOraculoError(err)
-            }
-            runningCommandId = null
         }
     }
 
@@ -2478,7 +3694,7 @@ private fun CommandsTab(
 
     pendingDeleteCommand?.let { target ->
         AlertDialog(
-            onDismissRequest = { pendingDeleteCommand = null },
+            onDismissRequest = { if (deletingCommandId == null) pendingDeleteCommand = null },
             containerColor = OraculoColors.Surface,
             title = {
                 Text(
@@ -2489,26 +3705,32 @@ private fun CommandsTab(
             text = {
                 Text(
                     text = tr(
-                        "\"${target.label}\" será removido de commands.toml no computador.",
-                        "\"${target.label}\" will be removed from commands.toml on the computer.",
+                        "\"${target.label}\" será removido deste computador.",
+                        "\"${target.label}\" will be removed from this computer.",
                     ),
                     color = OraculoColors.OnSurfaceMuted,
                 )
             },
             confirmButton = {
-                TextButton(
+                Button(
                     onClick = { confirmDelete(target) },
-                    shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
-                    modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
+                    enabled = deletingCommandId == null,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = OraculoColors.Error,
+                        contentColor = OraculoColors.OnError,
+                    ),
+                    shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                    modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightDialog),
                 ) {
-                    Text(tr("Remover", "Delete"), color = OraculoColors.Error)
+                    Text(tr("Remover", "Delete"))
                 }
             },
             dismissButton = {
                 TextButton(
                     onClick = { pendingDeleteCommand = null },
-                    shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
-                    modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
+                    enabled = deletingCommandId == null,
+                    shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                    modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightDialog),
                 ) {
                     Text(tr("Cancelar", "Cancel"), color = OraculoColors.OnSurfaceMuted)
                 }
@@ -2536,13 +3758,14 @@ private fun CommandsTab(
             )
             FilledTonalButton(
                 onClick = { openCreateEditor() },
-                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                enabled = canEditCommands,
+                shape = RoundedCornerShape(OraculoMetrics.CornerPill),
                 colors = ButtonDefaults.filledTonalButtonColors(
                     containerColor = OraculoColors.SecondaryContainer,
                     contentColor = OraculoColors.OnSecondaryContainer,
                 ),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                modifier = Modifier.height(OraculoMetrics.ControlHeightSmall),
+                modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightSmall),
             ) {
                 Icon(
                     imageVector = Icons.Default.Add,
@@ -2558,13 +3781,32 @@ private fun CommandsTab(
             }
             IconButton(
                 onClick = { loadCommands() },
-                modifier = Modifier.size(38.dp),
+                modifier = Modifier.size(44.dp),
             ) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
-                    contentDescription = "Atualizar lista",
+                    contentDescription = tr("Atualizar lista", "Refresh list"),
                     tint = OraculoColors.OnSurfaceMuted,
                     modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+
+        if (allowCommandsRun == false) {
+            Surface(
+                color = OraculoColors.SurfaceRecessed,
+                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                border = BorderStroke(1.dp, OraculoColors.Outline),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = tr(
+                        "Execução de comandos desativada nas permissões do computador.",
+                        "Running commands is disabled in your computer's permissions.",
+                    ),
+                    color = OraculoColors.OnSurfaceMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(12.dp),
                 )
             }
         }
@@ -2572,10 +3814,10 @@ private fun CommandsTab(
         if (errorMessage != null) {
             Surface(
                 color = OraculoColors.Error.copy(alpha = 0.14f),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, OraculoColors.Error.copy(alpha = 0.4f), RoundedCornerShape(14.dp)),
+                    .border(1.dp, OraculoColors.Error.copy(alpha = 0.4f), RoundedCornerShape(OraculoMetrics.CornerMedium)),
             ) {
                 Text(
                     text = errorMessage.orEmpty(),
@@ -2603,10 +3845,17 @@ private fun CommandsTab(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = tr(
-                        "Nenhum comando salvo ainda.\nToque em \"+ Novo\" para criar o primeiro.",
-                        "No saved commands yet.\nTap \"+ New\" to create the first one.",
-                    ),
+                    text = if (canEditCommands) {
+                        tr(
+                            "Nenhum comando salvo.\nToque em \"Novo\" para criar o primeiro.",
+                            "No saved commands yet.\nTap \"New\" to create one.",
+                        )
+                    } else {
+                        tr(
+                            "Nenhum comando salvo.",
+                            "No saved commands.",
+                        )
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = OraculoColors.OnSurfaceMuted,
                     textAlign = TextAlign.Center,
@@ -2617,14 +3866,20 @@ private fun CommandsTab(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                itemsIndexed(commands, key = { _, item -> item.id }) { _, item ->
+                itemsIndexed(commands, key = { _, item -> item.id }) { index, item ->
+                    val itemShape = remember(index, commands.size) {
+                        oraculoSegmentedItemShape(index, commands.size)
+                    }
                     CommandCardRow(
                         item = item,
+                        shape = itemShape,
                         isRunning = runningCommandId == item.id,
                         isDeleting = deletingCommandId == item.id,
-                        canRun = runningCommandId == null,
+                        hasDeleteInFlight = deletingCommandId != null,
+                        canRun = canRunCommands && runningCommandId == null,
+                        canEdit = canEditCommands,
                         onExecute = { executeCommand(item) },
                         onEdit = { openEditEditor(item) },
                         onDelete = { pendingDeleteCommand = item },
@@ -2641,13 +3896,14 @@ private fun CommandsTab(
             val result = lastResult
             if (result != null) {
                 CommandOutputCard(
-                    commandLabel = lastCommandLabel ?: "Saída",
+                    commandLabel = lastCommandLabel ?: tr("Saída", "Output"),
                     result = result,
                     onDismiss = { lastResult = null },
                 )
             }
         }
     }
+
 }
 
 @Composable
@@ -2697,20 +3953,20 @@ private fun CommandEditorDialog(
                     value = label,
                     onValueChange = onLabelChange,
                     label = { Text(tr("Nome", "Name")) },
-                    placeholder = { Text(tr("Ex.: Reiniciar Áudio", "e.g. Restart Audio")) },
+                    placeholder = { Text(tr("Ex.: Reiniciar áudio", "e.g. Restart audio")) },
                     singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                     colors = fieldColors,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = commandLine,
                     onValueChange = onCommandLineChange,
-                    label = { Text(tr("Comando shell", "Shell command")) },
-                    placeholder = { Text("Ex.: systemctl --user restart pipewire") },
+                    label = { Text(tr("Comando", "Command")) },
+                    placeholder = { Text(tr("Ex.: systemctl --user restart pipewire", "e.g. systemctl --user restart pipewire")) },
                     singleLine = true,
                     textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                     colors = fieldColors,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -2718,16 +3974,16 @@ private fun CommandEditorDialog(
                     value = description,
                     onValueChange = onDescriptionChange,
                     label = { Text(tr("Descrição (opcional)", "Description (optional)")) },
-                    placeholder = { Text(tr("Resumo curto exibido no cartão", "Short summary shown on card")) },
+                    placeholder = { Text(tr("Para que serve este comando", "What this command does")) },
                     singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
                     colors = fieldColors,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
                     text = tr(
-                        "Suporta argumentos com aspas; salvo em commands.toml no computador.",
-                        "Supports quoted arguments; saved in commands.toml on the computer.",
+                        "Aceita argumentos entre aspas.",
+                        "Supports quoted arguments.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = OraculoColors.OnSurfaceMuted,
@@ -2746,8 +4002,8 @@ private fun CommandEditorDialog(
                 onClick = onSubmit,
                 enabled = !isSaving,
                 colors = oraculoPrimaryButtonColors(),
-                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
-                modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
+                shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightDialog),
             ) {
                 if (isSaving) {
                     CircularProgressIndicator(
@@ -2764,8 +4020,8 @@ private fun CommandEditorDialog(
             TextButton(
                 onClick = onDismiss,
                 enabled = !isSaving,
-                shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
-                modifier = Modifier.height(OraculoMetrics.ControlHeightDialog),
+                shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightDialog),
             ) {
                 Text(tr("Cancelar", "Cancel"), color = OraculoColors.OnSurfaceMuted)
             }
@@ -2776,116 +4032,128 @@ private fun CommandEditorDialog(
 @Composable
 private fun CommandCardRow(
     item: QuickCommandItem,
+    shape: Shape = RoundedCornerShape(OraculoMetrics.CornerLarge),
     isRunning: Boolean,
     isDeleting: Boolean,
+    hasDeleteInFlight: Boolean = false,
     canRun: Boolean,
+    canEdit: Boolean = true,
     onExecute: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(OraculoColors.Surface)
-            .border(
-                width = 1.dp,
-                color = if (isRunning) OraculoColors.Primary else OraculoColors.Outline,
-                shape = RoundedCornerShape(14.dp),
-            )
-            .clickable(enabled = canRun && !isDeleting, onClick = onExecute)
-            .padding(start = 14.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+    val titleColor = if (isRunning) OraculoColors.OnSecondaryContainer else OraculoColors.OnSurface
+    val subColor = if (isRunning) OraculoColors.OnSecondaryContainer.copy(alpha = 0.82f) else OraculoColors.OnSurfaceMuted
+    val cmdLineColor = if (isRunning) OraculoColors.OnSecondaryContainer.copy(alpha = 0.82f) else OraculoColors.OnSurfaceMuted.copy(alpha = 0.85f)
+    val canEditRow = canEdit && !isDeleting && !hasDeleteInFlight
+
+    Surface(
+        onClick = onExecute,
+        enabled = canRun && !isDeleting,
+        color = if (isRunning) OraculoColors.SecondaryContainer else OraculoColors.Surface,
+        shape = shape,
+        border = if (OraculoColors.IsDark) null else BorderStroke(1.dp, OraculoColors.Outline),
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = item.label,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = OraculoColors.OnSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (item.description.isNotBlank()) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = item.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = OraculoColors.OnSurfaceMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (item.commandLine.isNotBlank()) {
-                Spacer(modifier = Modifier.height(3.dp))
-                Text(
-                    text = item.commandLine,
-                    style = TextStyle(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                    ),
-                    color = OraculoColors.OnSurfaceMuted.copy(alpha = 0.85f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(6.dp))
         Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 14.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            IconButton(
-                onClick = onEdit,
-                enabled = !isDeleting,
-                modifier = Modifier.size(36.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Edit,
-                    contentDescription = "Editar ${item.label}",
-                    tint = OraculoColors.OnSurfaceMuted,
-                    modifier = Modifier.size(18.dp),
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.label,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = titleColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-            }
-            IconButton(
-                onClick = onDelete,
-                enabled = !isDeleting && canRun,
-                modifier = Modifier.size(36.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.DeleteOutline,
-                    contentDescription = "Remover ${item.label}",
-                    tint = OraculoColors.OnSurfaceMuted,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-            Spacer(modifier = Modifier.width(2.dp))
-            FilledTonalIconButton(
-                onClick = onExecute,
-                enabled = canRun && !isDeleting && !isRunning,
-                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                    containerColor = OraculoColors.SecondaryContainer,
-                    contentColor = OraculoColors.OnSecondaryContainer,
-                ),
-                modifier = Modifier.size(36.dp),
-            ) {
-                if (isRunning || isDeleting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        color = OraculoColors.OnSecondaryContainer,
-                        strokeWidth = 2.dp,
+                if (item.description.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = item.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = subColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = "Executar ${item.label}",
-                        modifier = Modifier.size(20.dp),
+                }
+                if (item.commandLine.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = item.commandLine,
+                        style = TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                        ),
+                        color = cmdLineColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
+                }
+            }
+            Spacer(modifier = Modifier.width(6.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                if (canEdit) {
+                    IconButton(
+                        onClick = onEdit,
+                        enabled = canEditRow,
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = tr("Editar ${item.label}", "Edit ${item.label}"),
+                            tint = if (canEditRow) subColor else subColor.copy(alpha = 0.38f),
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    IconButton(
+                        onClick = onDelete,
+                        enabled = canEditRow,
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteOutline,
+                            contentDescription = tr("Remover ${item.label}", "Delete ${item.label}"),
+                            tint = if (canEditRow) subColor else subColor.copy(alpha = 0.38f),
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(2.dp))
+                }
+                FilledTonalIconButton(
+                    onClick = onExecute,
+                    enabled = canRun && !isDeleting && !isRunning,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = OraculoColors.SecondaryContainer,
+                        contentColor = OraculoColors.OnSecondaryContainer,
+                    ),
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    if (isRunning || isDeleting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = OraculoColors.OnSecondaryContainer,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = tr("Executar ${item.label}", "Run ${item.label}"),
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
             }
         }
     }
+
 }
 
 @Composable
@@ -2894,6 +4162,8 @@ private fun CommandOutputCard(
     result: CommandRunResult,
     onDismiss: () -> Unit,
 ) {
+    val darkTermPalette = ptyxisPaletteFor(true)
+    val exitErrorColor = ptyxisPaletteFor(false).Ansi16[9]
     val combined = remember(result) {
         buildString {
             if (result.stdout.isNotBlank()) append(result.stdout.trimEnd())
@@ -2908,9 +4178,9 @@ private fun CommandOutputCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(OraculoMetrics.CornerLarge))
             .background(OraculoColors.TerminalBackground)
-            .border(1.dp, OraculoColors.TerminalBorder, RoundedCornerShape(14.dp))
+            .border(1.dp, OraculoColors.TerminalBorder, RoundedCornerShape(OraculoMetrics.CornerLarge))
             .padding(12.dp),
     ) {
         Row(
@@ -2927,22 +4197,22 @@ private fun CommandOutputCard(
                 modifier = Modifier.weight(1f),
             )
             Text(
-                text = "exit ${result.exitCode}",
+                text = tr("saída ${result.exitCode}", "exit ${result.exitCode}"),
                 style = TextStyle(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     fontFeatureSettings = "tnum",
                 ),
-                color = if (result.exitCode == 0) OraculoColors.Success else OraculoColors.Error,
+                color = if (result.exitCode == 0) darkTermPalette.Ansi16[10] else exitErrorColor,
             )
             IconButton(
                 onClick = onDismiss,
-                modifier = Modifier.size(24.dp),
+                modifier = Modifier.size(36.dp),
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
-                    contentDescription = "Fechar saída",
-                    tint = OraculoColors.OnSurfaceMuted,
+                    contentDescription = tr("Fechar saída", "Close output"),
+                    tint = darkTermPalette.ForegroundMuted,
                     modifier = Modifier.size(16.dp),
                 )
             }
@@ -2962,4 +4232,280 @@ private fun CommandOutputCard(
             )
         }
     }
+
+}
+
+@Composable
+private fun RdpTunnelDialog(
+    client: OraculoMobileClient,
+    host: SavedHostInfo,
+    allowRdpTunnel: Boolean,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    @Suppress("DEPRECATION")
+    val clipboard = LocalClipboardManager.current
+    var retryNonce by remember { mutableIntStateOf(0) }
+    var tunnelSession by remember { mutableStateOf<MobileTunnelSession?>(null) }
+    var isOpening by remember { mutableStateOf(true) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var hintMsg by remember { mutableStateOf<String?>(null) }
+
+    DisposableEffect(host.endpointId, allowRdpTunnel, retryNonce) {
+        if (!allowRdpTunnel) {
+            isOpening = false
+            errorMsg = tr(
+                "Login remoto (túnel RDP) desativado nas permissões deste computador.",
+                "Remote login (RDP tunnel) is turned off on this computer.",
+            )
+            return@DisposableEffect onDispose {}
+        }
+
+        val active = AtomicBoolean(true)
+        isOpening = true
+        errorMsg = null
+        hintMsg = null
+        val tunnelRef = AtomicReference<MobileTunnelSession?>(null)
+
+        val job = CoroutineScope(Dispatchers.IO).launch {
+            val res = runCatching { client.startRdpTunnel(host.endpointId) }
+            if (!active.get()) {
+                res.onSuccess { sess ->
+                    runCatching {
+                        sess.closeTunnel()
+                        sess.close()
+                    }
+                }
+                return@launch
+            }
+            res.onSuccess { sess ->
+                tunnelRef.set(sess)
+            }
+            withContext(Dispatchers.Main + NonCancellable) {
+                if (!active.get()) {
+                    val toClose = tunnelRef.getAndSet(null)
+                    if (toClose != null) {
+                        CoroutineScope(Dispatchers.IO).launch {
+                            runCatching {
+                                toClose.closeTunnel()
+                                toClose.close()
+                            }
+                        }
+                    }
+                    return@withContext
+                }
+                isOpening = false
+                res.onSuccess { sess ->
+                    tunnelSession = sess
+                }.onFailure { err ->
+                    errorMsg = formatOraculoError(err)
+                }
+            }
+        }
+
+        onDispose {
+            active.set(false)
+            job.cancel()
+            val toClose = tunnelRef.getAndSet(null) ?: tunnelSession
+            tunnelSession = null
+            if (toClose != null) {
+                CoroutineScope(Dispatchers.IO).launch {
+                    runCatching {
+                        toClose.closeTunnel()
+                        toClose.close()
+                    }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(tunnelSession) {
+        val sess = tunnelSession ?: return@LaunchedEffect
+        while (true) {
+            delay(1000L)
+            val alive = withContext(Dispatchers.IO) {
+                runCatching { sess.isAlive() }.getOrDefault(false)
+            }
+            if (!alive) {
+                if (tunnelSession === sess) {
+                    tunnelSession = null
+                    errorMsg = tr(
+                        "Túnel RDP encerrado. Toque em Tentar novamente para reabrir.",
+                        "RDP tunnel closed. Tap Try again to reopen.",
+                    )
+                }
+                break
+            }
+        }
+    }
+
+    val activeTunnel = tunnelSession
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(OraculoMetrics.CornerSurfaceExpanded),
+        containerColor = OraculoColors.Surface,
+        titleContentColor = OraculoColors.OnSurface,
+        textContentColor = OraculoColors.OnSurface,
+        title = {
+            Text(
+                text = tr("Login remoto (${host.hostName})", "Remote login (${host.hostName})"),
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (isOpening) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = OraculoColors.Primary,
+                        )
+                        Text(
+                            text = tr("Abrindo túnel criptografado...", "Opening encrypted tunnel..."),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                } else if (errorMsg != null) {
+                    Text(
+                        text = errorMsg.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = OraculoColors.Error,
+                    )
+                } else if (activeTunnel != null) {
+                    val addr = activeTunnel.localAddress()
+                    Text(
+                        text = tr(
+                            "Conecte no seu app RDP (Windows App ou aFreeRDP) usando este endereço local e a senha do computador:",
+                            "Connect in your RDP app (Windows App or aFreeRDP) using this local address and your computer password:",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = OraculoColors.OnSurfaceMuted,
+                    )
+                    Surface(
+                        color = OraculoColors.TerminalBackground,
+                        shape = RoundedCornerShape(OraculoMetrics.CornerMedium),
+                        border = BorderStroke(1.dp, OraculoColors.TerminalBorder),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            SelectionContainer(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = addr,
+                                    style = TextStyle(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        fontFeatureSettings = "tnum",
+                                    ),
+                                    color = OraculoColors.TerminalForeground,
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    if (runCatching { clipboard.setText(AnnotatedString(addr)) }.isSuccess) {
+                                        hintMsg = tr("Endereço copiado.", "Address copied.")
+                                    }
+                                },
+                                modifier = Modifier.size(40.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = tr("Copiar endereço", "Copy address"),
+                                    tint = ptyxisPaletteFor(true).Ansi16[12],
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
+                    if (hintMsg != null) {
+                        Text(
+                            text = hintMsg.orEmpty(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = OraculoColors.Primary,
+                        )
+                    }
+                    Text(
+                        text = tr(
+                            "Mantenha esta janela aberta enquanto usa o aplicativo RDP para conservar o túnel ativo.",
+                            "Keep this dialog open while using your RDP app so the tunnel stays active.",
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = OraculoColors.OnSurfaceMuted,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (activeTunnel != null) {
+                val addr = activeTunnel.localAddress()
+                Button(
+                    onClick = {
+                        val copied = runCatching { clipboard.setText(AnnotatedString(addr)) }.isSuccess
+                        val uri = Uri.parse("rdp://full%20address=s:$addr")
+                        val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        runCatching { context.startActivity(intent) }.onFailure {
+                            hintMsg = if (copied) {
+                                tr(
+                                    "Nenhum aplicativo RDP compatível respondeu ao atalho. Endereço $addr copiado — cole manualmente no Windows App ou aFreeRDP.",
+                                    "No compatible RDP app handled the shortcut. $addr copied — paste it manually into Windows App or aFreeRDP.",
+                                )
+                            } else {
+                                tr(
+                                    "Nenhum aplicativo RDP compatível respondeu ao atalho. Use o endereço $addr manualmente no Windows App ou aFreeRDP.",
+                                    "No compatible RDP app handled the shortcut. Use $addr manually in Windows App or aFreeRDP.",
+                                )
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                    colors = oraculoPrimaryButtonColors(),
+                    modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightDialog),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(tr("Abrir app RDP", "Open RDP app"))
+                }
+            } else if (errorMsg != null && allowRdpTunnel) {
+                Button(
+                    onClick = { retryNonce += 1 },
+                    shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                    colors = oraculoPrimaryButtonColors(),
+                    modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightDialog),
+                ) {
+                    Text(tr("Tentar novamente", "Try again"))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(OraculoMetrics.CornerPill),
+                modifier = Modifier.heightIn(min = OraculoMetrics.ControlHeightDialog),
+            ) {
+                Text(
+                    text = if (activeTunnel != null) tr("Encerrar túnel", "Close tunnel") else tr("Fechar", "Close"),
+                    color = OraculoColors.OnSurfaceMuted,
+                )
+            }
+        },
+    )
 }

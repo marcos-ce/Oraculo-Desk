@@ -29,6 +29,10 @@ class ScreenVideoDecoder(
 
     private val availableInputs = ArrayDeque<Int>()
     private val pendingFrames = ArrayDeque<ScreenVideoFrame>()
+    private val cachedGop = ArrayDeque<ScreenVideoFrame>()
+    private var cachedGopBytes: Int = 0
+    private var cachedGopComplete: Boolean = false
+    private var replayingGop: Boolean = false
 
     private var surface: Surface? = null
     private var codec: MediaCodec? = null
@@ -43,17 +47,142 @@ class ScreenVideoDecoder(
     fun attachSurface(newSurface: Surface) {
         var staleCodec: MediaCodec? = null
         var shouldRequestIdr = false
+        var shouldReplay = false
         synchronized(lock) {
             if (released) return
             if (surface === newSurface && codec != null) return
             staleCodec = releaseCodecStateLocked()
             surface = newSurface
             awaitingKeyframe = true
-            shouldRequestIdr = streamWidth > 0 && streamHeight > 0
+            replayingGop = false
+            if (streamWidth > 0 && streamHeight > 0) {
+                if (cachedGop.isNotEmpty()) {
+                    shouldReplay = true
+                    shouldRequestIdr = !cachedGopComplete
+                } else {
+                    shouldRequestIdr = true
+                }
+            }
         }
         stopAndReleaseCodec(staleCodec)
+        if (shouldReplay) {
+            replayCachedGopIfReady(newSurface)
+        }
         if (shouldRequestIdr) {
             onRequestKeyframe()
+        }
+    }
+
+    fun ensureRenderedOrRequestKeyframe() {
+        var targetSurface: Surface? = null
+        var shouldReplay = false
+        var shouldRequestIdr = false
+        synchronized(lock) {
+            if (released) return
+            val s = surface ?: return
+            if (streamWidth <= 0 || streamHeight <= 0) return
+            if (codec == null && cachedGop.isNotEmpty()) {
+                targetSurface = s
+                shouldReplay = true
+                shouldRequestIdr = !cachedGopComplete
+            } else if (codec == null || awaitingKeyframe) {
+                shouldRequestIdr = true
+            }
+        }
+        if (shouldReplay && targetSurface != null) {
+            replayCachedGopIfReady(targetSurface!!)
+        }
+        if (shouldRequestIdr) {
+            onRequestKeyframe()
+        }
+    }
+
+    private fun replayCachedGopIfReady(expectedSurface: Surface) {
+        var staleBeforeConfigure: MediaCodec? = null
+        var targetW = 0
+        var targetH = 0
+        var shouldConfigure = false
+
+        synchronized(lock) {
+            if (released || surface !== expectedSurface || streamWidth <= 0 || streamHeight <= 0) return
+            if (cachedGop.isEmpty()) return
+            if (codec != null && configuredWidth == streamWidth && configuredHeight == streamHeight) {
+                // `submitFrame` já configurou e iniciou um keyframe mais recente nesta superfície.
+                return
+            }
+            staleBeforeConfigure = releaseCodecStateLocked()
+            targetW = streamWidth
+            targetH = streamHeight
+            shouldConfigure = true
+        }
+
+        stopAndReleaseCodec(staleBeforeConfigure)
+        if (!shouldConfigure) return
+
+        var staleToStop: MediaCodec? = null
+        var needKeyframeRequest = false
+        var errorMessage: String? = null
+
+        synchronized(lock) {
+            if (released || surface !== expectedSurface || streamWidth != targetW || streamHeight != targetH) return
+            if (cachedGop.isEmpty()) return
+            if (codec != null && configuredWidth == targetW && configuredHeight == targetH) return
+
+            try {
+                configureCodecLocked(targetW, targetH, expectedSurface)
+            } catch (e: Exception) {
+                Log.w(TAG, "Falha ao reconfigurar MediaCodec no retorno da superfície: ${e.message}", e)
+                staleToStop = releaseCodecStateLocked()
+                awaitingKeyframe = true
+                errorMessage = tr(
+                    "Decodificador de vídeo indisponível: ${e.message ?: "erro de codec"}",
+                    "Video decoder unavailable: ${e.message ?: "codec error"}",
+                )
+            }
+            if (errorMessage == null && codec != null) {
+                pendingFrames.clear()
+                for (f in cachedGop) {
+                    pendingFrames.addLast(f)
+                }
+                replayingGop = true
+                awaitingKeyframe = !cachedGopComplete
+                val outcome = feedAvailableLocked()
+                if (outcome.requestKeyframe) needKeyframeRequest = true
+                if (outcome.errorMessage != null) errorMessage = outcome.errorMessage
+                if (outcome.staleCodec != null) staleToStop = outcome.staleCodec
+            }
+        }
+
+        stopAndReleaseCodec(staleToStop)
+        val err = errorMessage
+        if (err != null) {
+            onDecoderError(err)
+        } else if (needKeyframeRequest) {
+            onRequestKeyframe()
+        }
+    }
+
+    private fun recordFrameInGopLocked(frame: ScreenVideoFrame) {
+        if (frame.keyframe) {
+            cachedGop.clear()
+            cachedGop.addLast(frame)
+            cachedGopBytes = frame.data.size
+            cachedGopComplete = true
+        } else if (cachedGop.isNotEmpty() && cachedGopComplete) {
+            if (
+                cachedGop.size < MAX_CACHED_GOP_FRAMES &&
+                cachedGopBytes + frame.data.size <= MAX_CACHED_GOP_BYTES
+            ) {
+                cachedGop.addLast(frame)
+                cachedGopBytes += frame.data.size
+            } else {
+                // Preserva o último IDR para exibição instantânea na retomada e marca GOP incompleto.
+                cachedGopComplete = false
+                while (cachedGop.size > 1) {
+                    val dropped = cachedGop.removeLast()
+                    cachedGopBytes -= dropped.data.size
+                }
+            }
         }
     }
 
@@ -65,6 +194,7 @@ class ScreenVideoDecoder(
             }
             surface = null
             awaitingKeyframe = true
+            replayingGop = false
             staleCodec = releaseCodecStateLocked()
         }
         stopAndReleaseCodec(staleCodec)
@@ -85,6 +215,10 @@ class ScreenVideoDecoder(
             streamWidth = nextW
             streamHeight = nextH
             awaitingKeyframe = true
+            cachedGop.clear()
+            cachedGopBytes = 0
+            cachedGopComplete = false
+            replayingGop = false
         }
 
         stopAndReleaseCodec(staleCodec)
@@ -106,6 +240,9 @@ class ScreenVideoDecoder(
 
         synchronized(lock) {
             if (released) return
+            // Guarda sempre o GOP ativo em memória (mesmo sem Surface anexada) para exibir
+            // a imagem imediatamente assim que o app volta do segundo plano ou a view monta.
+            recordFrameInGopLocked(frame)
             val s = surface ?: return
             if (streamWidth <= 0 || streamHeight <= 0) return
 
@@ -142,7 +279,10 @@ class ScreenVideoDecoder(
                         Log.w(TAG, "Falha ao configurar MediaCodec H.264: ${e.message}", e)
                         staleToStop = releaseCodecStateLocked()
                         awaitingKeyframe = true
-                        errorMessage = "Decodificador H.264 indisponível: ${e.message ?: "erro de codec"}"
+                        errorMessage = tr(
+                            "Decodificador de vídeo indisponível: ${e.message ?: "erro de codec"}",
+                            "Video decoder unavailable: ${e.message ?: "codec error"}",
+                        )
                     }
                 }
             }
@@ -160,13 +300,20 @@ class ScreenVideoDecoder(
             if (frame.keyframe) {
                 // Novo keyframe substitui qualquer fila antiga imediatamente para zerar backlog.
                 pendingFrames.clear()
+                replayingGop = false
                 awaitingKeyframe = false
                 pendingFrames.addLast(frame)
             } else {
                 if (awaitingKeyframe) return
-                if (pendingFrames.size >= MAX_PENDING_INPUT_FRAMES) {
+                val maxPending = if (replayingGop) {
+                    MAX_CACHED_GOP_FRAMES + MAX_PENDING_INPUT_FRAMES
+                } else {
+                    MAX_PENDING_INPUT_FRAMES
+                }
+                if (pendingFrames.size >= maxPending) {
                     // Evita acumular atraso no decodificador descartando até o próximo IDR limpo.
                     pendingFrames.clear()
+                    replayingGop = false
                     awaitingKeyframe = true
                     needKeyframeRequest = true
                     return@synchronized
@@ -195,6 +342,10 @@ class ScreenVideoDecoder(
             if (released) return
             released = true
             surface = null
+            cachedGop.clear()
+            cachedGopBytes = 0
+            cachedGopComplete = false
+            replayingGop = false
             staleCodec = releaseCodecStateLocked()
         }
         val posted = codecHandler.post {
@@ -248,12 +399,18 @@ class ScreenVideoDecoder(
                 val ptsUs = frame.ptsMs.toLong().coerceAtLeast(0L) * 1000L
                 activeCodec.queueInputBuffer(inputIdx, 0, frame.data.size, ptsUs, flags)
                 pendingFrames.removeFirst()
+                if (pendingFrames.isEmpty()) {
+                    replayingGop = false
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "Erro ao enfileirar entrada no MediaCodec; resetando para próximo keyframe", e)
                 val stale = releaseCodecStateLocked()
                 awaitingKeyframe = true
                 val fatal = if (e is MediaCodec.CodecException && !e.isRecoverable && !e.isTransient) {
-                    "Falha irrecuperável no decodificador H.264: ${e.diagnosticInfo}"
+                    tr(
+                        "Falha irrecuperável no decodificador de vídeo: ${e.diagnosticInfo}",
+                        "Unrecoverable video decoder error: ${e.diagnosticInfo}",
+                    )
                 } else {
                     null
                 }
@@ -358,7 +515,10 @@ class ScreenVideoDecoder(
                 stale = releaseCodecStateLocked()
                 awaitingKeyframe = true
                 if (!e.isRecoverable && !e.isTransient) {
-                    fatalMsg = "Falha irrecuperável no decodificador H.264: ${e.diagnosticInfo}"
+                    fatalMsg = tr(
+                        "Falha irrecuperável no decodificador de vídeo: ${e.diagnosticInfo}",
+                        "Unrecoverable video decoder error: ${e.diagnosticInfo}",
+                    )
                 } else {
                     needKeyframe = true
                 }
@@ -410,5 +570,7 @@ class ScreenVideoDecoder(
         private const val TAG = "OraculoScreenDecoder"
         private const val MAX_INPUT_BUFFER_BYTES = 2_097_152
         private const val MAX_PENDING_INPUT_FRAMES = 8
+        private const val MAX_CACHED_GOP_FRAMES = 60
+        private const val MAX_CACHED_GOP_BYTES = 4 * 1024 * 1024
     }
 }

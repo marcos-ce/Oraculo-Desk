@@ -3,8 +3,10 @@ package com.oraculo.app
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -85,7 +87,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.oraculo.app.ui.OraculoColors
+import java.util.Locale
 import kotlinx.coroutines.delay
 import uniffi.oraculo_mobile_core.MobileInputSession
 import uniffi.oraculo_mobile_core.MobileRemoteKey
@@ -130,7 +132,6 @@ internal class RemoteInputController(
         StickyModifier.SUPER to ModifierLatchState.OFF,
         StickyModifier.SHIFT to ModifierLatchState.OFF,
     )
-    private val lastModifierTapMs = mutableMapOf<StickyModifier, Long>()
 
     val shortcutModifierHeld: Boolean
         get() = (modifierStates[StickyModifier.CTRL] != ModifierLatchState.OFF) ||
@@ -187,9 +188,6 @@ internal class RemoteInputController(
         val session = inputSessionProvider() ?: return
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         val current = modifierStates[mod] ?: ModifierLatchState.OFF
-        val now = System.currentTimeMillis()
-        val prevTap = lastModifierTapMs[mod] ?: 0L
-        lastModifierTapMs[mod] = now
 
         when (current) {
             ModifierLatchState.OFF -> {
@@ -198,15 +196,29 @@ internal class RemoteInputController(
                     onPublishTelemetryProvider().invoke(tr("${mod.label} armado (1x)", "${mod.label} armed (1x)"))
                 }
             }
-            ModifierLatchState.ARMED -> {
-                if (now - prevTap <= 480L) {
+            ModifierLatchState.ARMED, ModifierLatchState.LOCKED -> {
+                modifierStates[mod] = ModifierLatchState.OFF
+                sendOnSession(session) { it.pressKey(mod.remoteKey, false) }
+                onPublishTelemetryProvider().invoke(tr("${mod.label} solto", "${mod.label} released"))
+            }
+        }
+    }
+
+    fun onModifierLongPress(mod: StickyModifier) {
+        val session = inputSessionProvider() ?: return
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        val current = modifierStates[mod] ?: ModifierLatchState.OFF
+
+        when (current) {
+            ModifierLatchState.OFF -> {
+                if (sendOnSession(session) { it.pressKey(mod.remoteKey, true) }) {
                     modifierStates[mod] = ModifierLatchState.LOCKED
                     onPublishTelemetryProvider().invoke(tr("${mod.label} travado", "${mod.label} locked"))
-                } else {
-                    modifierStates[mod] = ModifierLatchState.OFF
-                    sendOnSession(session) { it.pressKey(mod.remoteKey, false) }
-                    onPublishTelemetryProvider().invoke(tr("${mod.label} solto", "${mod.label} released"))
                 }
+            }
+            ModifierLatchState.ARMED -> {
+                modifierStates[mod] = ModifierLatchState.LOCKED
+                onPublishTelemetryProvider().invoke(tr("${mod.label} travado", "${mod.label} locked"))
             }
             ModifierLatchState.LOCKED -> {
                 modifierStates[mod] = ModifierLatchState.OFF
@@ -225,11 +237,20 @@ internal class RemoteInputController(
         val session = inputSessionProvider() ?: return
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         val tempHeld = spec.modifiers.filter { !isKeyHeld(it) }
+        val pressedTemp = mutableListOf<MobileRemoteKey>()
         val sent = sendOnSession(session) { s ->
-            tempHeld.forEach { s.pressKey(it, true) }
-            spec.key?.let { s.sendKey(it) }
-            spec.text?.let { s.sendText(it) }
-            tempHeld.asReversed().forEach { s.pressKey(it, false) }
+            try {
+                tempHeld.forEach { modKey ->
+                    s.pressKey(modKey, true)
+                    pressedTemp.add(modKey)
+                }
+                spec.key?.let { s.sendKey(it) }
+                spec.text?.let { s.sendText(it) }
+            } finally {
+                pressedTemp.asReversed().forEach { modKey ->
+                    runCatching { s.pressKey(modKey, false) }
+                }
+            }
         }
         if (sent) {
             disarmArmedModifiers()
@@ -238,7 +259,7 @@ internal class RemoteInputController(
     }
 
     fun sendBackspace() {
-        executeShortcut(ShortcutSpec("Backspace", key = MobileRemoteKey.BACKSPACE))
+        executeShortcut(ShortcutSpec(tr("Apagar", "Backspace"), key = MobileRemoteKey.BACKSPACE))
     }
 
     fun sendEnterAndClear() {
@@ -252,16 +273,16 @@ internal class RemoteInputController(
 
     fun onTextFieldChanged(next: TextFieldValue) {
         val newText = next.text
-        val session = inputSessionProvider()
-        if (shortcutModifierHeld && session != null) {
-            if (newText.length > syncedText.length) {
-                val (_, rawInserted) = computeLiveTextDelta(syncedText, newText)
-                val payload = if (!shiftHeld) rawInserted.lowercase() else rawInserted
+        val session = inputSessionProvider() ?: return
+        if (shortcutModifierHeld) {
+            val (deletes, rawInserted) = computeLiveTextDelta(syncedText, newText)
+            if (rawInserted.isNotEmpty()) {
+                val payload = if (!shiftHeld) rawInserted.lowercase(Locale.ROOT) else rawInserted
                 if (payload.isNotEmpty() && sendOnSession(session) { it.sendText(payload) }) {
                     disarmArmedModifiers()
                     onPublishTelemetryProvider().invoke(tr("atalho + $payload", "shortcut + $payload"))
                 }
-            } else if (newText.length < syncedText.length) {
+            } else if (deletes > 0) {
                 if (sendOnSession(session) { it.sendKey(MobileRemoteKey.BACKSPACE) }) {
                     disarmArmedModifiers()
                 }
@@ -274,20 +295,39 @@ internal class RemoteInputController(
         }
 
         if (newText != syncedText) {
-            if (session != null) {
-                val (deletes, inserted) = computeLiveTextDelta(syncedText, newText)
-                var okDel = true
-                repeat(deletes) {
-                    if (okDel) okDel = sendOnSession(session) { it.sendKey(MobileRemoteKey.BACKSPACE) }
-                }
-                if (okDel && inserted.isNotEmpty()) {
-                    sendOnSession(session) { it.sendText(inserted) }
-                }
-                disarmArmedModifiers()
+            val (deletes, inserted) = computeLiveTextDelta(syncedText, newText)
+            var okDel = true
+            repeat(deletes) {
+                if (okDel) okDel = sendOnSession(session) { it.sendKey(MobileRemoteKey.BACKSPACE) }
             }
-            val (nextSynced, nextField) = applyLiveDraftWindow(next)
-            syncedText = nextSynced
-            remoteField = nextField
+            if (okDel && inserted.isNotEmpty()) {
+                val normalized = inserted.replace("\r\n", "\n").replace('\r', '\n')
+                val parts = normalized.split('\n')
+                parts.forEachIndexed { idx, segment ->
+                    if (segment.isNotEmpty()) {
+                        sendOnSession(session) { it.sendText(segment) }
+                    }
+                    if (idx < parts.lastIndex) {
+                        sendOnSession(session) { it.sendKey(MobileRemoteKey.ENTER) }
+                    }
+                }
+            }
+            disarmArmedModifiers()
+            if (newText.contains('\n') || newText.contains('\r')) {
+                val tail = newText.replace("\r\n", "\n").replace('\r', '\n').substringAfterLast('\n')
+                val (nextSynced, nextField) = applyLiveDraftWindow(
+                    TextFieldValue(
+                        text = tail,
+                        selection = TextRange(tail.length),
+                    ),
+                )
+                syncedText = nextSynced
+                remoteField = nextField
+            } else {
+                val (nextSynced, nextField) = applyLiveDraftWindow(next)
+                syncedText = nextSynced
+                remoteField = nextField
+            }
         } else {
             remoteField = next
         }
@@ -322,6 +362,7 @@ internal fun rememberRemoteInputController(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun RemoteModifierRow(
     controller: RemoteInputController,
@@ -362,7 +403,7 @@ internal fun RemoteModifierRow(
             val textColor by animateColorAsState(
                 targetValue = when (state) {
                     ModifierLatchState.OFF -> OraculoColors.OnSurface
-                    ModifierLatchState.ARMED -> OraculoColors.Primary
+                    ModifierLatchState.ARMED -> OraculoColors.OnSecondaryContainer
                     ModifierLatchState.LOCKED -> OraculoColors.OnPrimaryAction
                 },
                 animationSpec = OraculoMotion.microTween(),
@@ -370,8 +411,6 @@ internal fun RemoteModifierRow(
             )
             val baseLabel = if (compact) mod.compactLabel else mod.label
             Surface(
-                onClick = { controller.onModifierTap(mod) },
-                enabled = enabled,
                 color = bg,
                 shape = shape,
                 border = BorderStroke(
@@ -380,7 +419,13 @@ internal fun RemoteModifierRow(
                 ),
                 modifier = Modifier
                     .weight(1f)
-                    .height(chipHeight),
+                    .height(chipHeight)
+                    .clip(shape)
+                    .combinedClickable(
+                        enabled = enabled,
+                        onClick = { controller.onModifierTap(mod) },
+                        onLongClick = { controller.onModifierLongPress(mod) },
+                    ),
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = if (compact) 4.dp else 6.dp),
@@ -401,7 +446,7 @@ internal fun RemoteModifierRow(
                         Spacer(modifier = Modifier.width(2.dp))
                         Icon(
                             imageVector = Icons.Default.Lock,
-                            contentDescription = "Travada",
+                            contentDescription = tr("Travada", "Locked"),
                             tint = textColor,
                             modifier = Modifier.size(if (compact) 10.dp else 11.dp),
                         )
@@ -425,7 +470,7 @@ internal fun RemoteModifierRow(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Backspace,
-                    contentDescription = "Backspace",
+                    contentDescription = tr("Apagar (Backspace)", "Backspace"),
                     tint = OraculoColors.OnSurface,
                     modifier = Modifier.size(if (compact) 15.dp else 16.dp),
                 )
@@ -578,15 +623,20 @@ internal fun RemoteKeyboardBar(
 ) {
     val focusManager = LocalFocusManager.current
     val softwareKeyboard = LocalSoftwareKeyboardController.current
+    var wasVisible by remember { mutableStateOf(visible) }
 
     LaunchedEffect(visible) {
         if (visible && autoFocusOnVisible) {
+            wasVisible = true
             delay(50)
             runCatching {
                 controller.focusRequester.requestFocus()
                 softwareKeyboard?.show()
             }
-        } else if (!visible) {
+        } else if (visible) {
+            wasVisible = true
+        } else if (wasVisible) {
+            wasVisible = false
             focusManager.clearFocus(force = true)
             softwareKeyboard?.hide()
         }
@@ -604,11 +654,11 @@ internal fun RemoteKeyboardBar(
             OraculoMetrics.ControlHeightInput
         }
         val placeholderLabel = if (controller.shortcutModifierHeld) {
-            tr("Atalho ativo: digite a tecla (ex.: d, c, v)...", "Shortcut active: type key (e.g. d, c, v)...")
+            tr("Atalho ativo: digite a tecla (ex.: d, c, v)...", "Shortcut active: type a key (e.g. d, c, v)...")
         } else if (compact) {
-            tr("Digitar no PC...", "Type on PC...")
+            tr("Digitar no computador...", "Type on computer...")
         } else {
-            tr("Digite ao vivo na janela ativa do PC...", "Type live into the active PC window...")
+            tr("Digite para enviar ao computador...", "Type to send to computer...")
         }
         val fieldShape = RoundedCornerShape(OraculoMetrics.CornerMedium)
 
@@ -657,6 +707,7 @@ internal fun RemoteKeyboardBar(
                             cursorBrush = SolidColor(OraculoColors.Primary),
                             keyboardOptions = KeyboardOptions(
                                 capitalization = KeyboardCapitalization.None,
+                                autoCorrectEnabled = false,
                                 imeAction = ImeAction.Send,
                             ),
                             keyboardActions = KeyboardActions(onSend = { controller.sendEnterAndClear() }),
@@ -680,7 +731,7 @@ internal fun RemoteKeyboardBar(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
-                                contentDescription = "Limpar campo local",
+                                contentDescription = tr("Limpar texto", "Clear text"),
                                 tint = OraculoColors.OnSurfaceMuted,
                                 modifier = Modifier.size(16.dp),
                             )
@@ -705,7 +756,7 @@ internal fun RemoteKeyboardBar(
                             IconButton(onClick = { controller.clearDraft() }) {
                                 Icon(
                                     imageVector = Icons.Default.Close,
-                                    contentDescription = "Limpar campo local",
+                                    contentDescription = tr("Limpar texto", "Clear text"),
                                     tint = OraculoColors.OnSurfaceMuted,
                                     modifier = Modifier.size(18.dp),
                                 )
@@ -717,6 +768,7 @@ internal fun RemoteKeyboardBar(
                     shape = fieldShape,
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
                         imeAction = ImeAction.Send,
                     ),
                     keyboardActions = KeyboardActions(onSend = { controller.sendEnterAndClear() }),
@@ -753,7 +805,7 @@ internal fun RemoteKeyboardBar(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardReturn,
-                    contentDescription = "Enviar Enter",
+                    contentDescription = tr("Enviar Enter", "Send Enter"),
                     modifier = Modifier.size(if (compact) 18.dp else 20.dp),
                 )
             }
